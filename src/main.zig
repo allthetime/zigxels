@@ -25,7 +25,7 @@ pub fn main() !void {
     const world = ecs.init();
     defer _ = ecs.fini(world);
 
-    ecs.set_ctx(world, engine, dummy_free);
+    ecs.set_ctx(world, &engine, dummy_free);
 
     ecs.COMPONENT(world, Position);
     ecs.COMPONENT(world, Velocity);

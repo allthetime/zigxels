@@ -19,12 +19,13 @@ We avoid global variables by passing the `*Engine` pointer into the ECS world co
 *   **Setup** (`main.zig`):
     ```zig
     // Pass the engine pointer to the ECS world so systems can access it
-    ecs.set_ctx(world, engine, dummy_free);
+    // Note: 'engine' is stack-allocated in main, so we pass its address
+    ecs.set_ctx(world, &engine, dummy_free);
     ```
 *   **Usage** (`systems.zig`):
-    Systems retrieve the engine to access the Renderer or Pixel Buffer.
+    Systems retrieve the engine using a helper function to access the Renderer or Pixel Buffer.
     ```zig
-    const engine = @as(*Engine, @ptrCast(@alignCast(ecs.get_ctx(it.world).?)));
+    const engine = Engine.getEngine(it.world);
     engine.renderer.fillRect(...);
     ```
 

@@ -18,7 +18,7 @@ pub const Engine = struct {
         return @as(*Engine, @ptrCast(@alignCast(ecs.get_ctx(world).?)));
     }
 
-    pub fn init(width: usize, height: usize) !*Engine {
+    pub fn init(width: usize, height: usize) !Engine {
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         const allocator = gpa.allocator();
 
@@ -61,8 +61,7 @@ pub const Engine = struct {
 
         const pixels = try allocator.alloc(u32, width * height);
 
-        const self = try allocator.create(Engine);
-        self.* = .{
+        return Engine{
             .gpa = gpa,
             .arena = std.heap.ArenaAllocator.init(allocator),
             .window = window,
@@ -72,7 +71,6 @@ pub const Engine = struct {
             .width = width,
             .height = height,
         };
-        return self;
     }
 
     pub fn beginFrame(self: *Engine) void {
@@ -104,6 +102,5 @@ pub const Engine = struct {
 
         self.arena.deinit();
         _ = self.gpa.deinit();
-        allocator.destroy(self);
     }
 };
