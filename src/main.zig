@@ -2,6 +2,11 @@ const std = @import("std");
 const SDL = @import("sdl2");
 const ecs = @import("zflecs");
 
+// import c header for chipmunk
+const c = @cImport({
+    @cInclude("chipmunk/chipmunk.h");
+});
+
 const engine_mod = @import("engine/core.zig");
 const input_mod = @import("engine/input.zig");
 const pixels_mod = @import("engine/pixels.zig");
@@ -18,6 +23,15 @@ pub fn main() !void {
     defer engine.deinit();
 
     var input = input_mod.InputState{};
+
+    // Basic test to see if it works
+    const gravity = c.cpv(0, -100);
+    const space = c.cpSpaceNew();
+    defer c.cpSpaceFree(space);
+
+    c.cpSpaceSetGravity(space, gravity);
+
+    std.debug.print("Chipmunk Space initialized with gravity y: {d}\n", .{c.cpSpaceGetGravity(space).y});
 
     // Fill pixel buffer with a gradient
     pixels_mod.makeGradient(engine.pixel_buffer, engine.width, engine.height, null);
@@ -42,6 +56,10 @@ pub fn main() !void {
     _ = ecs.set(world, player, Velocity, .{ .x = 1.0, .y = 2.0 });
     _ = ecs.set(world, player, Rectangle, .{ .w = 50.0, .h = 50.0, .color = SDL.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
 
+    const box = ecs.new_entity(world, "Box");
+    _ = ecs.set(world, box, Position, .{ .x = 400.0, .y = 300.0 });
+    _ = ecs.set(world, box, Rectangle, .{ .w = 100.0, .h = 100.0, .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
+
     var last_time = SDL.getTicks64();
     var cursor_size: f32 = 20.0;
 
@@ -51,7 +69,7 @@ pub fn main() !void {
 
         const dt = calculateDeltaTime(&last_time);
 
-        // Handle Drag Logic
+        // Handle Mouse Press to Set Target
         if (input.is_pressing) {
             _ = ecs.set(world, player, Target, .{ .x = @as(f32, @floatFromInt(input.mouse_x)), .y = @as(f32, @floatFromInt(input.mouse_y)) });
         }
