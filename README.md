@@ -1,6 +1,6 @@
-# Pixels ECS Engine
+# Zig Pixels
 
-A Zig-based game engine separating the "How" (Engine) from the "What" (Game) using an Entity Component System (ECS).
+Learning Zig making a simple engine. /w SDL, Flecs...
 
 ## Architecture
 
