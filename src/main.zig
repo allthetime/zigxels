@@ -12,12 +12,21 @@ const pixels_mod = @import("engine/pixels.zig");
 const game = @import("game/systems.zig");
 const components = @import("game/components.zig");
 
+// physics
 const Position = components.Position;
 const Velocity = components.Velocity;
-const Rectangle = components.Rectangle;
 const Target = components.Target;
+const Box = components.Box; // rendery
+
+// render
+const Rectangle = components.Rectangle;
+
+// tags
 const Bullet = components.Bullet;
 const Player = components.Player;
+const Ground = components.Ground;
+
+// groups
 const BulletsGroup = components.BulletsGroup;
 
 fn usize_to_f32(i: usize) f32 {
@@ -56,11 +65,11 @@ pub fn main() !void {
     var cursor_size: f32 = 20.0;
     var shooting = false;
 
-    // 2. Create the Bullets Parent
+    // Bullets Group to parent all bullets for easy dismissal and effect
 
-    const b_parent = ecs.new_entity(world, "Bullets");
+    const bullets_group = ecs.new_entity(world, "Bullets");
     // 3. Store it in the Singleton
-    _ = ecs.singleton_set(world, components.BulletsGroup, .{ .entity = b_parent });
+    _ = ecs.singleton_set(world, components.BulletsGroup, .{ .entity = bullets_group });
 
     while (!input.quit_requested) {
         engine.beginFrame();
@@ -74,9 +83,6 @@ pub fn main() !void {
         if (input.is_pressing) {
             // _ = ecs.set(world, player, Target, .{ .x = @as(f32, @floatFromInt(input.mouse_x)), .y = @as(f32, @floatFromInt(input.mouse_y)) });
         }
-
-        // const bullet_name_buff = "Bullet__";
-        // var buff2: [8]u8 = undefined;
 
         if (input.is_pressing) {
             //
@@ -102,6 +108,7 @@ pub fn main() !void {
                 const player_position = ecs.get(world, p, Position);
                 if (player_position) |pp| {
                     _ = ecs.set(world, bullet, Bullet, .{ ._dummy = 0 });
+                    _ = ecs.set(world, bullet, Box, .{ .size = 10 });
                     _ = ecs.set(world, bullet, Position, pp.*);
 
                     const mouse_x = @as(f32, @floatFromInt(input.mouse_x));
@@ -124,15 +131,15 @@ pub fn main() !void {
         } else {
             shooting = false;
         }
+        // Update ECS (Physics/Logic/Render)
 
         // Clear & Draw Texture (Pixel Layer)
         try engine.renderer.setColorRGB(0xF7, 0xA4, 0x1D); // Background color
         try engine.renderer.clear();
         try engine.updateTexture();
 
-        // Update ECS (Physics/Logic/Render)
+        pixels_mod.makeGradient(engine.pixel_buffer, engine.width, engine.height, null);
         _ = ecs.progress(world, dt);
-
         // Render Cursor (Manual for now)
         const cursorSize = updateCursorSize(input.is_pressing, &cursor_size);
         try renderMouseCursor(engine.renderer, &input, cursorSize);
@@ -198,6 +205,8 @@ fn register_components(world: *ecs.world_t) void {
     ecs.COMPONENT(world, Bullet);
     ecs.COMPONENT(world, Player);
     ecs.COMPONENT(world, BulletsGroup);
+    ecs.COMPONENT(world, Box);
+    ecs.COMPONENT(world, Ground);
 }
 
 fn register_systems(world: *ecs.world_t) void {
@@ -207,7 +216,10 @@ fn register_systems(world: *ecs.world_t) void {
 
     _ = ecs.ADD_SYSTEM(world, "seek", ecs.OnUpdate, game.seek_system);
     _ = ecs.ADD_SYSTEM(world, "gravity", ecs.OnUpdate, game.gravity_system);
+
     _ = ecs.ADD_SYSTEM(world, "render", ecs.OnStore, game.render_rect_system);
+    _ = ecs.ADD_SYSTEM(world, "pixel_boxer", ecs.OnStore, game.render_pixel_box);
+
     _ = ecs.ADD_SYSTEM(world, "shoot", ecs.OnUpdate, game.shoot_bullet);
     _ = ecs.ADD_SYSTEM(world, "move", ecs.OnUpdate, game.move_system);
 }
@@ -218,4 +230,10 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) void 
     _ = ecs.set(world, player, Velocity, .{ .x = 0.0, .y = 0.0 });
     _ = ecs.set(world, player, Rectangle, .{ .w = 50.0, .h = 50.0, .color = SDL.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
     _ = ecs.set(world, player, Player, .{ ._dummy = 0 });
+    _ = ecs.set(world, player, Box, .{ .size = 25 });
+
+    const ground1 = ecs.new_entity(world, "Ground_1");
+    _ = ecs.set(world, ground1, Ground, .{ ._dummy = 0 });
+    _ = ecs.set(world, ground1, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 1.5 });
+    _ = ecs.set(world, ground1, Box, .{ .size = 25 });
 }

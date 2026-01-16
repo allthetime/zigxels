@@ -5,12 +5,13 @@ const components = @import("components.zig");
 const Engine = @import("../engine/core.zig").Engine;
 
 const input_mod = @import("../engine/input.zig");
+const pixel_mod = @import("../engine/pixels.zig");
 
 const Position = components.Position;
 const Velocity = components.Velocity;
 const Target = components.Target;
 const Rectangle = components.Rectangle;
-// const Projectile = components.Projectile;
+const Box = components.Box;
 
 pub const PLAYER_SPEED: f32 = 400.0;
 pub const BULLET_SPEED: f32 = 600.0;
@@ -76,6 +77,20 @@ pub fn render_rect_system(it: *ecs.iter_t, positions: []Position, rectangles: []
     }
 }
 
+// pub fn render_pixel_box(it: *ecs.iter_t, positions: []Position, boxes: []Box) void {
+pub fn render_pixel_box(it: *ecs.iter_t, positions: []Position, boxes: []Box) void {
+    const engine = Engine.getEngine(it.world);
+    pixel_mod.drawBoxes(engine, positions, boxes);
+    for (positions, boxes) |pos, box| {
+        // std.debug.print("call from render_pixel_box_system x:{d} y:{d} with size: {d}", .{ pos.x, pos.y, box.size });
+        // pixel_mod.drawBox(engine, pos, box);
+        _ = pos;
+        _ = box;
+    }
+    // _ = boxes;
+    // _ = engine;
+}
+
 pub fn player_input_system(it: *ecs.iter_t, velocities: []Velocity) void {
     // Access your global input variable
     // This retrieves the data you set in the main loop
@@ -97,6 +112,27 @@ pub fn player_input_system(it: *ecs.iter_t, velocities: []Velocity) void {
         }
         // If no vertical keys are pressed, we leave vel.y alone so gravity can accumulate
     }
+}
+
+pub fn ground_collision_system(it: *ecs.iter_t) void {
+    _ = it;
+
+    //
+    // basic collision algo from rust proj for reference
+    //
+    // let x_collision_left = self.position.x < other.position.x + other.dimensions.width as i16;
+    // let x_collision_right = self.position.x + self.dimensions.width as i16 > other.position.x;
+    // let y_collision_top = self.position.y < other.position.y + other.dimensions.height as i16;
+    // let y_collision_bottom = self.position.y + self.dimensions.height as i16 > other.position.y;
+
+    //
+    // box bounds
+    //
+    // x <= x_usize + box.size and
+    // x > x_usize - box.size and
+    // y <= y_usize + box.size and
+    // y > y_usize - box.size
+
 }
 
 // pub fn shoot_bullet(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, targets: []Target) void {
