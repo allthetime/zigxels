@@ -216,12 +216,16 @@ fn register_systems(world: *ecs.world_t) void {
 
     _ = ecs.ADD_SYSTEM(world, "seek", ecs.OnUpdate, game.seek_system);
     _ = ecs.ADD_SYSTEM(world, "gravity", ecs.OnUpdate, game.gravity_system);
+    _ = ecs.ADD_SYSTEM(world, "shoot", ecs.OnUpdate, game.shoot_bullet);
+
+    // Separated Axis Movement & Collision
+    _ = ecs.ADD_SYSTEM(world, "move_x", ecs.OnUpdate, game.move_x_system);
+    _ = ecs.ADD_SYSTEM(world, "ground_collision_x", ecs.OnUpdate, game.ground_collision_x_system);
+    _ = ecs.ADD_SYSTEM(world, "move_y", ecs.OnUpdate, game.move_y_system);
+    _ = ecs.ADD_SYSTEM(world, "ground_collision_y", ecs.OnUpdate, game.ground_collision_y_system);
 
     _ = ecs.ADD_SYSTEM(world, "render", ecs.OnStore, game.render_rect_system);
     _ = ecs.ADD_SYSTEM(world, "pixel_boxer", ecs.OnStore, game.render_pixel_box);
-
-    _ = ecs.ADD_SYSTEM(world, "shoot", ecs.OnUpdate, game.shoot_bullet);
-    _ = ecs.ADD_SYSTEM(world, "move", ecs.OnUpdate, game.move_system);
 }
 
 fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) void {
@@ -232,7 +236,7 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) void 
     _ = ecs.set(world, player, Player, .{ ._dummy = 0 });
     _ = ecs.set(world, player, Box, .{ .size = 25 });
 
-    const ground1 = ecs.new_entity(world, "Ground_1");
+    const ground1 = ecs.new_entity(world, "Ground1");
     _ = ecs.set(world, ground1, Ground, .{ ._dummy = 0 });
     _ = ecs.set(world, ground1, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 1.5 });
     _ = ecs.set(world, ground1, Box, .{ .size = 25 });

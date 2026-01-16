@@ -12,6 +12,9 @@ const Velocity = components.Velocity;
 const Target = components.Target;
 const Rectangle = components.Rectangle;
 const Box = components.Box;
+const Ground = components.Ground;
+
+const Axis = enum { x, y };
 
 pub const PLAYER_SPEED: f32 = 400.0;
 pub const BULLET_SPEED: f32 = 600.0;
@@ -26,19 +29,23 @@ pub fn gravity_system(it: *ecs.iter_t, velocities: []Velocity) void {
     }
 }
 
-pub fn move_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity) void {
+fn move_axis(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, comptime axis: Axis) void {
     const engine = Engine.getEngine(it.world);
-    const width = @as(f32, @floatFromInt(engine.width));
-    const height = @as(f32, @floatFromInt(engine.height));
+    const limit = if (axis == .x) @as(f32, @floatFromInt(engine.width)) else @as(f32, @floatFromInt(engine.height));
     const dt = it.delta_time;
 
     for (positions, velocities) |*pos, vel| {
-        pos.x += vel.x * dt;
-        pos.y += vel.y * dt;
-
-        pos.x = clamp(f32, pos.x, 0.0, width);
-        pos.y = clamp(f32, pos.y, 0.0, height);
+        @field(pos, @tagName(axis)) += @field(vel, @tagName(axis)) * dt;
+        @field(pos, @tagName(axis)) = clamp(f32, @field(pos, @tagName(axis)), 0.0, limit);
     }
+}
+
+pub fn move_x_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity) void {
+    move_axis(it, positions, velocities, .x);
+}
+
+pub fn move_y_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity) void {
+    move_axis(it, positions, velocities, .y);
 }
 
 fn clamp(comptime T: type, value: T, min: T, max: T) T {
@@ -88,7 +95,7 @@ pub fn render_pixel_box(it: *ecs.iter_t, positions: []Position, boxes: []Box) vo
         _ = box;
     }
     // _ = boxes;
-    // _ = engine;
+    _ = engine;
 }
 
 pub fn player_input_system(it: *ecs.iter_t, velocities: []Velocity) void {
@@ -114,25 +121,52 @@ pub fn player_input_system(it: *ecs.iter_t, velocities: []Velocity) void {
     }
 }
 
-pub fn ground_collision_system(it: *ecs.iter_t) void {
-    _ = it;
+fn collision_axis(it: *ecs.iter_t, positions: []Position, boxes: []Box, velocities: []Velocity, comptime axis: Axis) void {
+    const world = it.world;
 
-    //
-    // basic collision algo from rust proj for reference
-    //
-    // let x_collision_left = self.position.x < other.position.x + other.dimensions.width as i16;
-    // let x_collision_right = self.position.x + self.dimensions.width as i16 > other.position.x;
-    // let y_collision_top = self.position.y < other.position.y + other.dimensions.height as i16;
-    // let y_collision_bottom = self.position.y + self.dimensions.height as i16 > other.position.y;
+    var desc = ecs.query_desc_t{};
+    desc.terms[0] = .{ .id = ecs.id(Ground) };
+    desc.terms[1] = .{ .id = ecs.id(Position) };
+    desc.terms[2] = .{ .id = ecs.id(Box) };
+    const query = ecs.query_init(world, &desc) catch return;
+    defer ecs.query_fini(query);
 
-    //
-    // box bounds
-    //
-    // x <= x_usize + box.size and
-    // x > x_usize - box.size and
-    // y <= y_usize + box.size and
-    // y > y_usize - box.size
+    for (positions, boxes, velocities) |*pos, box, *vel| {
+        const b_half = @as(f32, @floatFromInt(box.size));
 
+        var q_it = ecs.query_iter(world, query);
+        while (ecs.query_next(&q_it)) {
+            const g_positions = ecs.field(&q_it, Position, 1).?;
+            const g_boxes = ecs.field(&q_it, Box, 2).?;
+
+            for (0..q_it.count()) |j| {
+                const gp = g_positions[j];
+                const gb = g_boxes[j];
+                const g_half = @as(f32, @floatFromInt(gb.size));
+
+                const dx = pos.x - gp.x;
+                const dy = pos.y - gp.y;
+
+                const overlap_x = (b_half + g_half) - @abs(dx);
+                const overlap_y = (b_half + g_half) - @abs(dy);
+
+                if (overlap_x > 0 and overlap_y > 0) {
+                    const overlap = if (axis == .x) overlap_x else overlap_y;
+                    const diff = if (axis == .x) dx else dy;
+                    @field(pos, @tagName(axis)) += if (diff > 0) overlap else -overlap;
+                    @field(vel, @tagName(axis)) = 0;
+                }
+            }
+        }
+    }
+}
+
+pub fn ground_collision_x_system(it: *ecs.iter_t, positions: []Position, boxes: []Box, velocities: []Velocity) void {
+    collision_axis(it, positions, boxes, velocities, .x);
+}
+
+pub fn ground_collision_y_system(it: *ecs.iter_t, positions: []Position, boxes: []Box, velocities: []Velocity) void {
+    collision_axis(it, positions, boxes, velocities, .y);
 }
 
 // pub fn shoot_bullet(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, targets: []Target) void {
