@@ -103,9 +103,22 @@ pub fn main() !void {
                 if (player_position) |pp| {
                     _ = ecs.set(world, bullet, Bullet, .{ ._dummy = 0 });
                     _ = ecs.set(world, bullet, Position, pp.*);
-                    _ = ecs.set(world, bullet, Velocity, .{ .x = 0.0, .y = 0.0 });
+
+                    const mouse_x = @as(f32, @floatFromInt(input.mouse_x));
+                    const mouse_y = @as(f32, @floatFromInt(input.mouse_y));
+                    const dx = mouse_x - pp.x;
+                    const dy = mouse_y - pp.y;
+                    const dist = @sqrt(dx * dx + dy * dy);
+
+                    var vx: f32 = 0;
+                    var vy: f32 = 0;
+                    if (dist > 0) {
+                        vx = (dx / dist) * game.BULLET_SPEED;
+                        vy = (dy / dist) * game.BULLET_SPEED;
+                    }
+
+                    _ = ecs.set(world, bullet, Velocity, .{ .x = vx, .y = vy });
                     _ = ecs.set(world, bullet, Rectangle, .{ .w = 20.0, .h = 20.0, .color = SDL.Color{ .r = 255, .g = 0, .b = 255, .a = 255 } });
-                    _ = ecs.set(world, bullet, Target, .{ .x = @as(f32, @floatFromInt(input.mouse_x)), .y = @as(f32, @floatFromInt(input.mouse_y)) });
                 } else {}
             }
         } else {
@@ -188,14 +201,15 @@ fn register_components(world: *ecs.world_t) void {
 }
 
 fn register_systems(world: *ecs.world_t) void {
-    _ = ecs.ADD_SYSTEM(world, "move", ecs.OnUpdate, game.move_system);
-    _ = ecs.ADD_SYSTEM(world, "seek", ecs.OnUpdate, game.seek_system);
-    _ = ecs.ADD_SYSTEM(world, "render", ecs.OnStore, game.render_rect_system);
-    _ = ecs.ADD_SYSTEM(world, "shoot", ecs.OnUpdate, game.shoot_bullet);
-
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_input_logic", ecs.PreUpdate, game.player_input_system, &.{
         .{ .id = ecs.id(Player) },
     });
+
+    _ = ecs.ADD_SYSTEM(world, "seek", ecs.OnUpdate, game.seek_system);
+    _ = ecs.ADD_SYSTEM(world, "gravity", ecs.OnUpdate, game.gravity_system);
+    _ = ecs.ADD_SYSTEM(world, "render", ecs.OnStore, game.render_rect_system);
+    _ = ecs.ADD_SYSTEM(world, "shoot", ecs.OnUpdate, game.shoot_bullet);
+    _ = ecs.ADD_SYSTEM(world, "move", ecs.OnUpdate, game.move_system);
 }
 
 fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) void {

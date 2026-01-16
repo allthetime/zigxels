@@ -1,13 +1,6 @@
-# Zig Pixels
 
-Learning Zig making a simple engine.
+# Zigxels
 
-## Dependencies
-*   **SDL2**: Windowing and Rendering.
-*   **zflecs**: Zig bindings for the Flecs ECS.
+Zflecs + SDL2
 
-## Running
-```bash
-zig build run
-```
-
+using stuff from https://github.com/zig-gamedev
