@@ -13,6 +13,8 @@ const Target = components.Target;
 const Rectangle = components.Rectangle;
 const Box = components.Box;
 const Ground = components.Ground;
+const Bullet = components.Bullet;
+const Player = components.Player;
 
 const Axis = enum { x, y };
 
@@ -30,13 +32,35 @@ pub fn gravity_system(it: *ecs.iter_t, velocities: []Velocity) void {
 }
 
 fn move_axis(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, comptime axis: Axis) void {
-    const engine = Engine.getEngine(it.world);
-    const limit = if (axis == .x) @as(f32, @floatFromInt(engine.width)) else @as(f32, @floatFromInt(engine.height));
     const dt = it.delta_time;
 
     for (positions, velocities) |*pos, vel| {
         @field(pos, @tagName(axis)) += @field(vel, @tagName(axis)) * dt;
-        @field(pos, @tagName(axis)) = clamp(f32, @field(pos, @tagName(axis)), 0.0, limit);
+    }
+}
+
+pub fn player_clamp_system(it: *ecs.iter_t, positions: []Position) void {
+    const engine = Engine.getEngine(it.world);
+    const w = @as(f32, @floatFromInt(engine.width));
+    const h = @as(f32, @floatFromInt(engine.height));
+
+    for (positions) |*pos| {
+        pos.x = clamp(f32, pos.x, 0.0, w);
+        pos.y = clamp(f32, pos.y, 0.0, h);
+    }
+}
+
+pub fn bullet_cleanup_system(it: *ecs.iter_t, positions: []Position) void {
+    const engine = Engine.getEngine(it.world);
+    const w = @as(f32, @floatFromInt(engine.width));
+    const h = @as(f32, @floatFromInt(engine.height));
+    const ents = it.entities();
+
+    for (0..it.count()) |i| {
+        const pos = positions[i];
+        if (pos.x < 0 or pos.x > w or pos.y < 0 or pos.y > h) {
+            ecs.delete(it.world, ents[i]);
+        }
     }
 }
 
@@ -95,7 +119,7 @@ pub fn render_pixel_box(it: *ecs.iter_t, positions: []Position, boxes: []Box) vo
         _ = box;
     }
     // _ = boxes;
-    _ = engine;
+    // _ = engine;
 }
 
 pub fn player_input_system(it: *ecs.iter_t, velocities: []Velocity) void {

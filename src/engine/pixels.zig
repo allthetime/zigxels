@@ -67,44 +67,31 @@ pub fn drawBox(engine: *Engine, position: Position, box: Box) void {
 }
 
 pub fn drawBoxes(engine: *Engine, positions: []Position, boxes: []Box) void {
-    for (engine.pixel_buffer, 0..) |*pixel, index| {
-        const x = index % engine.width;
-        const y = index / engine.width;
+    const width = engine.width;
+    const height = engine.height;
+    const pixel_buffer = engine.pixel_buffer;
 
-        // std.debug.print("index: {d}, AA x: {d}, y: {d}\n", .{ index, x, y });
+    for (positions, boxes) |pos, box| {
+        // Robust checks to avoid panics on float-to-int conversion
+        if (!std.math.isFinite(pos.x) or !std.math.isFinite(pos.y)) continue;
+        if (pos.x < -100.0 or pos.y < -100.0 or pos.x > @as(f32, @floatFromInt(width)) + 100.0 or pos.y > @as(f32, @floatFromInt(height)) + 100.0) continue;
 
-        const black: @Vector(3, u8) = .{ 0x00, 0x00, 0x00 };
+        const x_center = @as(i32, @intFromFloat(pos.x));
+        const y_center = @as(i32, @intFromFloat(pos.y));
+        const size = @as(i32, @intCast(box.size));
 
-        for (positions, boxes) |pos, box| {
-            const y_usize = @as(usize, @intFromFloat(pos.y));
-            const x_usize = @as(usize, @intFromFloat(pos.x));
+        const x_start = @max(0, x_center - size);
+        const x_end = @min(@as(i32, @intCast(width)) - 1, x_center + size);
+        const y_start = @max(0, y_center - size);
+        const y_end = @min(@as(i32, @intCast(height)) - 1, y_center + size);
 
-            if (box.size > y_usize or box.size > x_usize) {
-                continue;
-            }
-
-            if (x <= x_usize + box.size and
-                x > x_usize - box.size and
-                y <= y_usize + box.size and
-                y > y_usize - box.size)
-            {
-                pixel.* =
-                    (@as(u32, black[0]) << 24) |
-                    (@as(u32, black[1]) << 16) |
-                    (@as(u32, black[2]) << 8) |
-                    0xFF;
+        var y: i32 = y_start;
+        while (y <= y_end) : (y += 1) {
+            var x: i32 = x_start;
+            while (x <= x_end) : (x += 1) {
+                const index = @as(usize, @intCast(y)) * width + @as(usize, @intCast(x));
+                pixel_buffer[index] = 0x000000FF; // Black RGBA8888
             }
         }
-
-        // fn draw_rect (&self, x: i16, y: i16, thing: Ref<Thing>) -> bool {
-        //     x >= thing.position.x
-        //         && x < thing.position.x + thing.dimensions.width as i16
-        //         && y >= thing.position.y
-        //         && y < thing.position.y + thing.dimensions.height as i16
-        // }
-
-        // _ = pixel_buffer;
-        // Pack RGBA values into a 32-bit pixel format (RGBA8888)
-        // pixel.* = (@as(u32, r) << 24) | (@as(u32, g) << 16) | (@as(u32, b) << 8) | 0xFF;
     }
 }

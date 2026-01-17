@@ -224,6 +224,14 @@ fn register_systems(world: *ecs.world_t) void {
     _ = ecs.ADD_SYSTEM(world, "move_y", ecs.OnUpdate, game.move_y_system);
     _ = ecs.ADD_SYSTEM(world, "ground_collision_y", ecs.OnUpdate, game.ground_collision_y_system);
 
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_clamp", ecs.OnUpdate, game.player_clamp_system, &.{
+        .{ .id = ecs.id(Player) },
+    });
+
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "bullet_cleanup", ecs.OnUpdate, game.bullet_cleanup_system, &.{
+        .{ .id = ecs.id(Bullet) },
+    });
+
     _ = ecs.ADD_SYSTEM(world, "render", ecs.OnStore, game.render_rect_system);
     _ = ecs.ADD_SYSTEM(world, "pixel_boxer", ecs.OnStore, game.render_pixel_box);
 }
