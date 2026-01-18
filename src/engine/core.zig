@@ -10,6 +10,7 @@ pub const Engine = struct {
 
     // Pixel layer
     pixel_buffer: []u32,
+    background_buffer: []u32,
     texture: SDL.Texture,
     width: usize,
     height: usize,
@@ -60,6 +61,7 @@ pub const Engine = struct {
         );
 
         const pixels = try allocator.alloc(u32, width * height);
+        const background = try allocator.alloc(u32, width * height);
 
         return Engine{
             .gpa = gpa,
@@ -67,6 +69,7 @@ pub const Engine = struct {
             .window = window,
             .renderer = renderer,
             .pixel_buffer = pixels,
+            .background_buffer = background,
             .texture = texture,
             .width = width,
             .height = height,
@@ -75,6 +78,10 @@ pub const Engine = struct {
 
     pub fn beginFrame(self: *Engine) void {
         _ = self.arena.reset(.retain_capacity);
+    }
+
+    pub fn restoreBackground(self: *Engine) void {
+        @memcpy(self.pixel_buffer, self.background_buffer);
     }
 
     pub fn updateTexture(self: *Engine) !void {
@@ -94,6 +101,7 @@ pub const Engine = struct {
     pub fn deinit(self: *Engine) void {
         const allocator = self.gpa.allocator();
         allocator.free(self.pixel_buffer);
+        allocator.free(self.background_buffer);
 
         self.texture.destroy();
         self.renderer.destroy();

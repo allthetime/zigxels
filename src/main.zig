@@ -39,17 +39,10 @@ pub fn main() !void {
 
     var input = input_mod.InputState{};
 
-    // Basic test to see if it works
-    const gravity = c.cpv(0, -100);
-    const space = c.cpSpaceNew();
-    defer c.cpSpaceFree(space);
-
-    c.cpSpaceSetGravity(space, gravity);
-
-    std.debug.print("Chipmunk Space initialized with gravity y: {d}\n", .{c.cpSpaceGetGravity(space).y});
-
-    // Fill pixel buffer with a gradient
-    pixels_mod.makeGradient(engine.pixel_buffer, engine.width, engine.height, null);
+    // Generate gradient ONCE and store it in background_buffer
+    pixels_mod.makeGradient(engine.background_buffer, engine.width, engine.height, null);
+    // Copy to working buffer initially
+    @memcpy(engine.pixel_buffer, engine.background_buffer);
 
     const world = ecs.init();
     defer _ = ecs.fini(world);
@@ -138,7 +131,8 @@ pub fn main() !void {
         try engine.renderer.clear();
         try engine.updateTexture();
 
-        pixels_mod.makeGradient(engine.pixel_buffer, engine.width, engine.height, null);
+        // REPLACE the expensive makeGradient call with fast memory copy
+        engine.restoreBackground();
         _ = ecs.progress(world, dt);
 
         // Render Cursor (Manual for now)
