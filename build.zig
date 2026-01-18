@@ -34,16 +34,6 @@ pub fn build(b: *std.Build) void {
     root_module.addImport("zflecs", zflecs.module("root"));
     exe.linkLibrary(zflecs.artifact("flecs"));
 
-    // chipmunk
-    // 1. Tell Zig where to find the Chipmunk headers
-    exe.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
-    // 2. Tell Zig where to find the compiled library file
-    exe.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/lib" });
-    // 3. Link the specific library (libchipmunk.dylib or .a)
-    exe.linkSystemLibrary("chipmunk");
-    // 4. Always link LibC when working with C libraries
-    exe.linkLibC();
-
     b.installArtifact(exe);
 
     const run_exe = b.addRunArtifact(exe);

@@ -5,6 +5,49 @@ const Engine = @import("../engine/core.zig").Engine;
 const Position = components.Position;
 const Box = components.Box;
 
+/// SIMD-optimized gradient generation - processes 8 pixels at once
+pub fn makeGradientSIMD(pixel_buffer: []u32, width: usize, height: usize) void {
+    const simd_width = 8;
+
+    for (0..height) |y| {
+        const row_start = y * width;
+        const g: u8 = @intCast((y * 255) / height);
+        const g_component = @as(u32, g) << 16;
+
+        var x: usize = 0;
+
+        // SIMD loop - process 8 pixels at once
+        while (x + simd_width <= width) : (x += simd_width) {
+            const x_vec: @Vector(8, u32) = .{
+                @intCast(x),
+                @intCast(x + 1),
+                @intCast(x + 2),
+                @intCast(x + 3),
+                @intCast(x + 4),
+                @intCast(x + 5),
+                @intCast(x + 6),
+                @intCast(x + 7),
+            };
+
+            const r_vec = (x_vec * @as(@Vector(8, u32), @splat(255))) /
+                @as(@Vector(8, u32), @splat(@intCast(width)));
+
+            const pixels = (r_vec << @as(@Vector(8, u5), @splat(24))) |
+                @as(@Vector(8, u32), @splat(g_component)) |
+                @as(@Vector(8, u32), @splat(0x80FF));
+
+            pixel_buffer[row_start + x ..][0..8].* = pixels;
+        }
+
+        // Scalar cleanup for remaining pixels
+        while (x < width) : (x += 1) {
+            const r: u8 = @intCast((x * 255) / width);
+            pixel_buffer[row_start + x] = (@as(u32, r) << 24) | g_component | 0x80FF;
+        }
+    }
+}
+
+/// Original scalar gradient generation (preserved for reference/comparison)
 pub fn makeGradient(pixel_buffer: []u32, width: usize, height: usize, shift: ?@Vector(2, usize)) void {
     for (pixel_buffer, 0..) |*pixel, index| {
         const x = if (shift) |s| (index % width + s[0]) % width else index % width;

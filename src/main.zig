@@ -39,8 +39,8 @@ pub fn main() !void {
 
     var input = input_mod.InputState{};
 
-    // Generate gradient ONCE and store it in background_buffer
-    pixels_mod.makeGradient(engine.background_buffer, engine.width, engine.height, null);
+    // Generate gradient ONCE and store it in background_buffer (using SIMD-optimized version)
+    pixels_mod.makeGradientSIMD(engine.background_buffer, engine.width, engine.height);
     // Copy to working buffer initially
     @memcpy(engine.pixel_buffer, engine.background_buffer);
 
@@ -49,10 +49,6 @@ pub fn main() !void {
 
     ecs.set_ctx(world, &engine, dummy_free);
     setup_game(world, &engine);
-
-    const box = ecs.new_entity(world, "Box");
-    _ = ecs.set(world, box, Position, .{ .x = 400.0, .y = 300.0 });
-    _ = ecs.set(world, box, Rectangle, .{ .w = 100.0, .h = 100.0, .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
 
     var last_time = SDL.getTicks64();
     var cursor_size: f32 = 20.0;
