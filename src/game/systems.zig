@@ -19,7 +19,7 @@ const Player = components.Player;
 const Axis = enum { x, y };
 
 pub const PLAYER_SPEED: f32 = 400.0;
-pub const BULLET_SPEED: f32 = 600.0;
+pub const BULLET_SPEED: f32 = 1000.0;
 pub const GRAVITY: f32 = 2500.0;
 pub const JUMP_IMPULSE: f32 = -600.0;
 
@@ -58,7 +58,7 @@ pub fn bullet_cleanup_system(it: *ecs.iter_t, positions: []Position) void {
 
     for (0..it.count()) |i| {
         const pos = positions[i];
-        if (pos.x < 0 or pos.x > w or pos.y < 0 or pos.y > h) {
+        if (pos.x < 0 or pos.x > w or pos.y > h) {
             ecs.delete(it.world, ents[i]);
         }
     }

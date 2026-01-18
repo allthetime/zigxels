@@ -14,6 +14,12 @@ pub const Bullet = struct { _dummy: u8 };
 pub const Player = struct { _dummy: u8 };
 pub const Ground = struct { _dummy: u8 };
 
+// singletons for easy access
+
 pub const BulletsGroup = struct {
+    entity: ecs.entity_t,
+};
+
+pub const PlayerContainer = struct {
     entity: ecs.entity_t,
 };

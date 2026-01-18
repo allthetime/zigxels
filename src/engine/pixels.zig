@@ -49,6 +49,9 @@ pub fn drawBox(engine: *Engine, position: Position, box: Box) void {
     //
     // stuck!
     // how to derive index from x/y pair?
+    // const index = y * width + x;
+    // if 0,0 is bottom left, then
+    // const index = (height - y - 1) * width + x;
     //
 
     const center_pixel = &engine.pixel_buffer[index];

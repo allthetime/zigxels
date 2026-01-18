@@ -140,6 +140,7 @@ pub fn main() !void {
 
         pixels_mod.makeGradient(engine.pixel_buffer, engine.width, engine.height, null);
         _ = ecs.progress(world, dt);
+
         // Render Cursor (Manual for now)
         const cursorSize = updateCursorSize(input.is_pressing, &cursor_size);
         try renderMouseCursor(engine.renderer, &input, cursorSize);
@@ -149,6 +150,12 @@ pub fn main() !void {
             if (ecs.singleton_get(world, components.BulletsGroup)) |group| {
                 // Delete everything linked to this parent
                 ecs.delete_with(world, ecs.pair(ecs.ChildOf, group.entity));
+            }
+            if (ecs.singleton_get(world, components.PlayerContainer)) |pc| {
+                const player_entity = pc.entity;
+                // Reset Player Position
+                _ = ecs.set(world, player_entity, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 2.0 });
+                _ = ecs.set(world, player_entity, Velocity, .{ .x = 0.0, .y = 0.0 });
             }
             input.reset = false;
         }
@@ -165,7 +172,8 @@ fn calculateDeltaTime(last_time: *u64) f32 {
     const now = SDL.getTicks64();
     const dt = @as(f32, @floatFromInt(now - last_time.*)) / 1000.0;
     last_time.* = now;
-    return dt;
+    // Cap delta time to prevent large jumps (e.g., first frame or lag)
+    return @min(dt, 1.0 / 60.0); // Max 60 FPS equivalent
 }
 
 fn updateCursorSize(pressing: bool, current: *f32) i32 {
@@ -207,6 +215,7 @@ fn register_components(world: *ecs.world_t) void {
     ecs.COMPONENT(world, BulletsGroup);
     ecs.COMPONENT(world, Box);
     ecs.COMPONENT(world, Ground);
+    ecs.COMPONENT(world, components.PlayerContainer);
 }
 
 fn register_systems(world: *ecs.world_t) void {
@@ -243,6 +252,8 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) void 
     _ = ecs.set(world, player, Rectangle, .{ .w = 50.0, .h = 50.0, .color = SDL.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
     _ = ecs.set(world, player, Player, .{ ._dummy = 0 });
     _ = ecs.set(world, player, Box, .{ .size = 25 });
+
+    _ = ecs.singleton_set(world, components.PlayerContainer, .{ .entity = player });
 
     const ground1 = ecs.new_entity(world, "Ground1");
     _ = ecs.set(world, ground1, Ground, .{ ._dummy = 0 });
