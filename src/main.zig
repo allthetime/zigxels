@@ -33,8 +33,11 @@ fn usize_to_f32(i: usize) f32 {
     return @as(f32, @floatFromInt(i));
 }
 
+const HEIGHT: usize = 768;
+const WIDTH: usize = 1024;
+
 pub fn main() !void {
-    var engine = try engine_mod.Engine.init(640, 480);
+    var engine = try engine_mod.Engine.init(WIDTH, HEIGHT);
     defer engine.deinit();
 
     var input = input_mod.InputState{};
