@@ -111,6 +111,31 @@ pub const Rotation = extern struct {
     }
 };
 
+pub const Mat2 = extern struct {
+    x: Vec2,
+    y: Vec2,
+
+    pub inline fn init(x: Vec2, y: Vec2) Mat2 {
+        return .{ .x = x, .y = y };
+    }
+
+    pub inline fn mulVec(self: Mat2, v: Vec2) Vec2 {
+        return self.x.mul(v.x).add(self.y.mul(v.y));
+    }
+
+    pub inline fn mulVecT(self: Mat2, v: Vec2) Vec2 {
+        return Vec2.init(v.dot(self.x), v.dot(self.y));
+    }
+
+    pub inline fn mul(self: Mat2, other: Mat2) Mat2 {
+        return Mat2.init(self.mulVec(other.x), self.mulVec(other.y));
+    }
+
+    pub inline fn mulT(self: Mat2, other: Mat2) Mat2 {
+        return Mat2.init(self.mulVecT(other.x), self.mulVecT(other.y));
+    }
+};
+
 pub const Transform = extern struct {
     p: Vec2,
     r: Rotation,
@@ -262,8 +287,8 @@ const Simplex = struct {
     count: i32,
 };
 
-fn makeProxy(shape: Shape, p: *Proxy) void {
-    switch (shape) {
+fn makeProxy(shape: *const Shape, p: *Proxy) void {
+    switch (shape.*) {
         .circle => |c| {
             p.radius = c.r;
             p.count = 1;
@@ -284,7 +309,7 @@ fn makeProxy(shape: Shape, p: *Proxy) void {
             p.verts[0] = c.a;
             p.verts[1] = c.b;
         },
-        .poly => |poly| {
+        .poly => |*poly| {
             p.radius = 0;
             p.count = poly.count;
             @memcpy(p.verts[0..@intCast(poly.count)], poly.verts[0..@intCast(poly.count)]);
@@ -442,7 +467,7 @@ fn gjkSimplexMetric(s: *const Simplex) f32 {
     };
 }
 
-pub fn gjk(A: Shape, ax_ptr: ?*const Transform, B: Shape, bx_ptr: ?*const Transform, use_radius: bool, iterations: ?*i32, cache: ?*GJKCache, outA: ?*Vec2, outB: ?*Vec2) f32 {
+pub fn gjk(A: *const Shape, ax_ptr: ?*const Transform, B: *const Shape, bx_ptr: ?*const Transform, use_radius: bool, iterations: ?*i32, cache: ?*GJKCache, outA: ?*Vec2, outB: ?*Vec2) f32 {
     const ax = if (ax_ptr) |p| p.* else Transform.identity();
     const bx = if (bx_ptr) |p| p.* else Transform.identity();
 
@@ -604,9 +629,9 @@ pub fn gjk(A: Shape, ax_ptr: ?*const Transform, B: Shape, bx_ptr: ?*const Transf
     return dist;
 }
 
-pub fn collidedGJK(A: Shape, ax: ?*const Transform, B: Shape, bx: ?*const Transform) bool {
+pub fn collidedGJK(A: *const Shape, ax: ?*const Transform, B: *const Shape, bx: ?*const Transform) bool {
     const d = gjk(A, ax, B, bx, true, null, null, null, null);
-    return d == 0;
+    return d < 1.0e-5;
 }
 
 // ... Additional implementations like c2TOI and Manifolds would follow similarly.
@@ -614,17 +639,17 @@ pub fn collidedGJK(A: Shape, ax: ?*const Transform, B: Shape, bx: ?*const Transf
 // The user asked to rewrite the lib, so I should try to include everything.
 
 // Raycasting
-pub fn castRay(ray: Ray, B: Shape, bx: ?*const Transform, out: *Raycast) bool {
-    switch (B) {
-        .circle => |c| return rayToCircle(ray, c, out),
-        .aabb => |bb| return rayToAABB(ray, bb, out),
-        .capsule => |c| return rayToCapsule(ray, c, out),
-        .poly => |p| return rayToPoly(ray, p, bx, out),
+pub fn castRay(A: Ray, B: *const Shape, bx: ?*const Transform, out: *Raycast) bool {
+    switch (B.*) {
+        .circle => |c| return rayToCircle(A, c, out),
+        .aabb => |c| return rayToAABB(A, c, out),
+        .capsule => |c| return rayToCapsule(A, c, out),
+        .poly => |*c| return rayToPoly(A, c, bx, out),
     }
 }
 
 // Implementations of ray casts
-fn rayToCircle(A: Ray, B: Circle, out: *Raycast) bool {
+pub fn rayToCircle(A: Ray, B: Circle, out: *Raycast) bool {
     const p = B.p;
     const m = A.p.sub(p);
     const c = m.dot(m) - B.r * B.r;
@@ -642,7 +667,7 @@ fn rayToCircle(A: Ray, B: Circle, out: *Raycast) bool {
     return false;
 }
 
-fn rayToAABB(A: Ray, B: AABB, out: *Raycast) bool {
+pub fn rayToAABB(A: Ray, B: AABB, out: *Raycast) bool {
     // Simplified Zig port using slabs
     var tmin: f32 = 0;
     var tmax: f32 = A.t;
@@ -700,34 +725,20 @@ fn rayToAABB(A: Ray, B: AABB, out: *Raycast) bool {
     return true;
 }
 
-fn rayToCapsule(A: Ray, B: Capsule, out: *Raycast) bool {
-    // ... Implement based on C code ...
-    // For now, implementing shell to show structure.
-    // The C code for capsule raycast is quite involved.
-    // I will skip implementation details for brevity unless requested,
-    // but the structure is there.
-    // Actually I'll implement it.
-
-    var M: Transform = undefined; // reuse c2m as Transform with p=0
-    M.r.s = B.b.sub(B.a).norm().y; // A bit hacky porting, let's just do vector math
-
-    // Vector logic from C
+pub fn rayToCapsule(A: Ray, B: Capsule, out: *Raycast) bool {
     const cap_n = B.b.sub(B.a);
     const len = cap_n.len();
     if (len == 0) return false;
+
     const y_axis = cap_n.mul(1.0 / len);
     const x_axis = y_axis.ccw90();
-
-    // M matrix in C was columns x, y
-    // M * v => v.x * x_axis + v.y * y_axis
-    // M^T * v => (v.dot(x_axis), v.dot(y_axis))
-
+    const M = Mat2.init(x_axis, y_axis);
 
     // transform ray to capsule local space
     // translate P relative to A
     const p_local = A.p.sub(B.a);
-    const yAp = Vec2.init(p_local.dot(x_axis), p_local.dot(y_axis));
-    const yAd = Vec2.init(A.d.dot(x_axis), A.d.dot(y_axis));
+    const yAp = M.mulVecT(p_local);
+    const yAd = M.mulVecT(A.d);
     const yAe = yAp.add(yAd.mul(A.t));
 
     const yBb_y = len;
@@ -764,7 +775,7 @@ fn rayToCapsule(A: Ray, B: Capsule, out: *Raycast) bool {
     return false;
 }
 
-fn rayToPoly(A: Ray, B: Poly, bx_ptr: ?*const Transform, out: *Raycast) bool {
+pub fn rayToPoly(A: Ray, B: *const Poly, bx_ptr: ?*const Transform, out: *Raycast) bool {
     const bx = if (bx_ptr) |x| x.* else Transform.identity();
     const p = bx.mulVecT(A.p);
     // d in local space
@@ -1159,10 +1170,7 @@ pub fn circleToPolyManifold(A: Circle, B: *const Poly, bx_ptr: ?*const Transform
     const shapeB = Shape{ .poly = B.* };
     const bx = if (bx_ptr) |x| x.* else Transform.identity();
 
-    // Pass poly pointer via Shape? Shape holds Poly by value.
-    // gjk takes Shape by value. Poly is small (8 verts), so copy is fine.
-
-    const d = gjk(shapeA, null, shapeB, bx_ptr, false, null, null, &a, &b);
+    const d = gjk(&shapeA, null, &shapeB, bx_ptr, false, null, null, &a, &b);
 
     if (d != 0) {
         const n = b.sub(a);
@@ -1215,7 +1223,7 @@ pub fn capsuleToPolyManifold(A: Capsule, B: *const Poly, bx_ptr: ?*const Transfo
     const shapeB = Shape{ .poly = B.* };
     const bx = if (bx_ptr) |x| x.* else Transform.identity();
 
-    const d = gjk(shapeA, null, shapeB, bx_ptr, false, null, null, &a, &b);
+    const d = gjk(&shapeA, null, &shapeB, bx_ptr, false, null, null, &a, &b);
 
     // deep
     if (d < 1.0e-6) {
@@ -1357,7 +1365,7 @@ pub fn polyToPolyManifold(A: *const Poly, ax_ptr: ?*const Transform, B: *const P
 }
 
 // Time of Impact
-pub fn toi(A: Shape, ax_ptr: ?*const Transform, vA: Vec2, B: Shape, bx_ptr: ?*const Transform, vB: Vec2, use_radius: bool) TOIResult {
+pub fn toi(A: *const Shape, ax_ptr: ?*const Transform, vA: Vec2, B: *const Shape, bx_ptr: ?*const Transform, vB: Vec2, use_radius: bool) TOIResult {
     var result = TOIResult{
         .hit = 0,
         .toi = 1.0,
@@ -1618,10 +1626,10 @@ pub fn polyToPoly(A: *const Poly, ax: ?*const Transform, B: *const Poly, bx: ?*c
     return gjk(shapeA, ax, shapeB, bx, true, null, null, null, null) == 0;
 }
 
-pub fn collided(A: Shape, ax: ?*const Transform, B: Shape, bx: ?*const Transform) bool {
-    switch (A) {
+pub fn collided(A: *const Shape, ax: ?*const Transform, B: *const Shape, bx: ?*const Transform) bool {
+    switch (A.*) {
         .circle => |c| {
-            switch (B) {
+            switch (B.*) {
                 .circle => |oc| return circleToCircle(c, oc),
                 .aabb => |occ| return circleToAABB(c, occ),
                 .capsule => |occ| return circleToCapsule(c, occ),
@@ -1629,7 +1637,7 @@ pub fn collided(A: Shape, ax: ?*const Transform, B: Shape, bx: ?*const Transform
             }
         },
         .aabb => |c| {
-            switch (B) {
+            switch (B.*) {
                 .circle => |occ| return circleToAABB(occ, c),
                 .aabb => |occ| return aabbToAABB(c, occ),
                 .capsule => |occ| return aabbToCapsule(c, occ),
@@ -1637,29 +1645,29 @@ pub fn collided(A: Shape, ax: ?*const Transform, B: Shape, bx: ?*const Transform
             }
         },
         .capsule => |c| {
-            switch (B) {
+            switch (B.*) {
                 .circle => |occ| return circleToCapsule(occ, c),
                 .aabb => |occ| return aabbToCapsule(occ, c),
                 .capsule => |occ| return capsuleToCapsule(c, occ),
                 .poly => |*occ| return capsuleToPoly(c, occ, bx),
             }
         },
-        .poly => |c| {
-            switch (B) {
-                .circle => |occ| return circleToPoly(occ, &c, ax),
-                .aabb => |occ| return aabbToPoly(occ, &c, ax),
-                .capsule => |occ| return capsuleToPoly(occ, &c, ax),
-                .poly => |*occ| return polyToPoly(&c, ax, occ, bx),
+        .poly => |*c| {
+            switch (B.*) {
+                .circle => |occ| return circleToPoly(occ, c, ax),
+                .aabb => |occ| return aabbToPoly(occ, c, ax),
+                .capsule => |occ| return capsuleToPoly(occ, c, ax),
+                .poly => |*occ| return polyToPoly(c, ax, occ, bx),
             }
         },
     }
 }
 
-pub fn collide(A: Shape, ax: ?*const Transform, B: Shape, bx: ?*const Transform, m: *Manifold) void {
+pub fn collide(A: *const Shape, ax: ?*const Transform, B: *const Shape, bx: ?*const Transform, m: *Manifold) void {
     m.count = 0;
-    switch (A) {
+    switch (A.*) {
         .circle => |c| {
-            switch (B) {
+            switch (B.*) {
                 .circle => |oc| circleToCircleManifold(c, oc, m),
                 .aabb => |occ| circleToAABBManifold(c, occ, m),
                 .capsule => |occ| circleToCapsuleManifold(c, occ, m),
@@ -1667,7 +1675,7 @@ pub fn collide(A: Shape, ax: ?*const Transform, B: Shape, bx: ?*const Transform,
             }
         },
         .aabb => |c| {
-            switch (B) {
+            switch (B.*) {
                 .circle => |occ| {
                     circleToAABBManifold(occ, c, m);
                     m.n = m.n.neg();
@@ -1678,7 +1686,7 @@ pub fn collide(A: Shape, ax: ?*const Transform, B: Shape, bx: ?*const Transform,
             }
         },
         .capsule => |c| {
-            switch (B) {
+            switch (B.*) {
                 .circle => |occ| {
                     circleToCapsuleManifold(occ, c, m);
                     m.n = m.n.neg();
@@ -1691,21 +1699,21 @@ pub fn collide(A: Shape, ax: ?*const Transform, B: Shape, bx: ?*const Transform,
                 .poly => |*occ| capsuleToPolyManifold(c, occ, bx, m),
             }
         },
-        .poly => |c| {
-            switch (B) {
+        .poly => |*c| {
+            switch (B.*) {
                 .circle => |occ| {
-                    circleToPolyManifold(occ, &c, ax, m);
+                    circleToPolyManifold(occ, c, ax, m);
                     m.n = m.n.neg();
                 },
                 .aabb => |occ| {
-                    aabbToPolyManifold(occ, &c, ax, m);
+                    aabbToPolyManifold(occ, c, ax, m);
                     m.n = m.n.neg();
                 },
                 .capsule => |occ| {
-                    capsuleToPolyManifold(occ, &c, ax, m);
+                    capsuleToPolyManifold(occ, c, ax, m);
                     m.n = m.n.neg();
                 },
-                .poly => |*occ| polyToPolyManifold(&c, ax, occ, bx, m),
+                .poly => |*occ| polyToPolyManifold(c, ax, occ, bx, m),
             }
         },
     }
