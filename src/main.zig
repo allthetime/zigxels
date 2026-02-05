@@ -28,6 +28,7 @@ const Position = components.Position;
 const Velocity = components.Velocity;
 const Target = components.Target;
 const Collider = components.Collider;
+const PhysicsBody = components.PhysicsBody;
 
 // render
 const Renderable = components.Renderable;
@@ -217,15 +218,25 @@ fn register_components(world: *ecs.world_t) void {
     ecs.TAG(world, Bullet);
     ecs.TAG(world, Player);
     ecs.TAG(world, Ground);
+    ecs.TAG(world, PhysicsBody);
 }
 
 fn register_systems(world: *ecs.world_t) void {
-    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_input_logic", ecs.PreUpdate, game.player_input_system, &.{
+    // 1. Player Controller (Handling Input + Movement + Collision)
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_controller", ecs.OnUpdate, game.player_controller_system, &.{
         .{ .id = ecs.id(Player) },
+        .{ .id = ecs.id(Position) },
+        .{ .id = ecs.id(Velocity) },
+        .{ .id = ecs.id(Collider) },
     });
 
     _ = ecs.ADD_SYSTEM(world, "seek", ecs.OnUpdate, game.seek_system);
-    _ = ecs.ADD_SYSTEM(world, "gravity", ecs.OnUpdate, game.gravity_system);
+
+    // Gravity (Generic: Requires PhysicsBody)
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "gravity", ecs.OnUpdate, game.gravity_system, &.{
+        .{ .id = ecs.id(Velocity) },
+        .{ .id = ecs.id(PhysicsBody) },
+    });
 
     // Shoot system (explicit filter for Player)
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "shoot", ecs.OnUpdate, game.shoot_system, &.{
@@ -233,11 +244,33 @@ fn register_systems(world: *ecs.world_t) void {
         .{ .id = ecs.id(Position) },
     });
 
-    // Separated Axis Movement & Collision
-    _ = ecs.ADD_SYSTEM(world, "move_x", ecs.OnUpdate, game.move_x_system);
-    _ = ecs.ADD_SYSTEM(world, "ground_collision_x", ecs.OnUpdate, game.ground_collision_x_system);
-    _ = ecs.ADD_SYSTEM(world, "move_y", ecs.OnUpdate, game.move_y_system);
-    _ = ecs.ADD_SYSTEM(world, "ground_collision_y", ecs.OnUpdate, game.ground_collision_y_system);
+    // Separated Axis Movement & Collision (Generic Physics: Requires PhysicsBody)
+
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "move_x", ecs.OnUpdate, game.move_x_system, &.{
+        .{ .id = ecs.id(Position) },
+        .{ .id = ecs.id(Velocity) },
+        .{ .id = ecs.id(PhysicsBody) },
+    });
+
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "ground_collision_x", ecs.OnUpdate, game.ground_collision_x_system, &.{
+        .{ .id = ecs.id(Position) },
+        .{ .id = ecs.id(Collider) },
+        .{ .id = ecs.id(Velocity) },
+        .{ .id = ecs.id(PhysicsBody) },
+    });
+
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "move_y", ecs.OnUpdate, game.move_y_system, &.{
+        .{ .id = ecs.id(Position) },
+        .{ .id = ecs.id(Velocity) },
+        .{ .id = ecs.id(PhysicsBody) },
+    });
+
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "ground_collision_y", ecs.OnUpdate, game.ground_collision_y_system, &.{
+        .{ .id = ecs.id(Position) },
+        .{ .id = ecs.id(Collider) },
+        .{ .id = ecs.id(Velocity) },
+        .{ .id = ecs.id(PhysicsBody) },
+    });
 
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_clamp", ecs.OnUpdate, game.player_clamp_system, &.{
         .{ .id = ecs.id(Player) },

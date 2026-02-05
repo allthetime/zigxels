@@ -16,6 +16,7 @@ const Collider = components.Collider;
 const Ground = components.Ground;
 const Bullet = components.Bullet;
 const Player = components.Player;
+const PhysicsBody = components.PhysicsBody;
 
 const Axis = enum { x, y };
 
@@ -56,6 +57,28 @@ fn getWorldAABB(pos: Position, collider: Collider) c2.AABB {
             };
         },
     }
+}
+
+/// Helper to check if an AABB collides with ANY Ground entity
+fn checkCollision(world: *ecs.world_t, test_aabb: c2.AABB) bool {
+    var desc = ecs.query_desc_t{};
+    desc.terms[0] = .{ .id = ecs.id(Ground) };
+    desc.terms[1] = .{ .id = ecs.id(Position) };
+    desc.terms[2] = .{ .id = ecs.id(Collider) };
+    const query = ecs.query_init(world, &desc) catch return false;
+    defer ecs.query_fini(query);
+
+    var q_it = ecs.query_iter(world, query);
+    while (ecs.query_next(&q_it)) {
+        const g_positions = ecs.field(&q_it, Position, 1).?;
+        const g_colliders = ecs.field(&q_it, Collider, 2).?;
+
+        for (0..q_it.count()) |i| {
+            const ground_aabb = getWorldAABB(g_positions[i], g_colliders[i]);
+            if (c2.aabbToAABB(test_aabb, ground_aabb)) return true;
+        }
+    }
+    return false;
 }
 
 // --- Systems ---
@@ -154,19 +177,45 @@ pub fn render_system(it: *ecs.iter_t, positions: []Position, colliders: []Collid
     }
 }
 
-pub fn player_input_system(it: *ecs.iter_t, velocities: []Velocity) void {
-    const input = ecs.singleton_get(it.world, input_mod.InputState) orelse return;
+/// KINEMATIC PLAYER CONTROLLER
+/// Handles Movement, Gravity, and Collision sequentially to ensure tight controls without glitches.
+pub fn player_controller_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, colliders: []Collider) void {
+    const world = it.world;
+    const input = ecs.singleton_get(world, input_mod.InputState) orelse return;
+    const dt = it.delta_time;
 
-    for (velocities) |*vel| {
+    for (positions, velocities, colliders) |*pos, *vel, col| {
+        // 1. Horizontal Input
         var dx: f32 = 0;
         if (input.pressed_directions.left) dx -= 1;
         if (input.pressed_directions.right) dx += 1;
         vel.x = dx * PLAYER_SPEED;
 
+        // 2. Vertical Input (Gravity + Jump)
+        vel.y += GRAVITY * dt;
         if (input.pressed_directions.up) {
+            // Jetpack / Jump
             vel.y = -PLAYER_SPEED;
         } else if (input.pressed_directions.down) {
             vel.y = PLAYER_SPEED;
+        }
+
+        // 3. MOVE X
+        pos.x += vel.x * dt;
+        var player_aabb = getWorldAABB(pos.*, col);
+        if (checkCollision(world, player_aabb)) {
+            // HIT WALL -> Undo Move X
+            pos.x -= vel.x * dt;
+            vel.x = 0;
+        }
+
+        // 4. MOVE Y
+        pos.y += vel.y * dt;
+        player_aabb = getWorldAABB(pos.*, col); // Re-calc AABB with new Y
+        if (checkCollision(world, player_aabb)) {
+            // HIT FLOOR/CEILING -> Undo Move Y
+            pos.y -= vel.y * dt;
+            vel.y = 0;
         }
     }
 }
@@ -200,7 +249,6 @@ fn collision_axis(it: *ecs.iter_t, positions: []Position, colliders: []Collider,
                     const overlap_y = @min(entity_aabb.max.y, ground_aabb.max.y) - @max(entity_aabb.min.y, ground_aabb.min.y);
 
                     // Ignore shallow collision on the perpendicular axis
-                    // This prevents "corner sliding" when standing on top of something
                     const other_overlap = if (axis == .x) overlap_y else overlap_x;
                     if (other_overlap < 0.2) continue;
 
@@ -235,6 +283,7 @@ pub fn shoot_system(it: *ecs.iter_t, positions: []Position) void {
         // Create Bullet Entity
         const bullet = ecs.new_id(world);
         ecs.add(world, bullet, Bullet); // TAG
+        ecs.add(world, bullet, PhysicsBody); // NEW: Bullet is physics controlled
 
         // Add to Group
         if (bullets_group) |group| {

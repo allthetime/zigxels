@@ -18,6 +18,7 @@ pub const Target = struct { x: f32, y: f32 };
 pub const Bullet = struct {};
 pub const Player = struct {};
 pub const Ground = struct {};
+pub const PhysicsBody = struct {};
 
 // singletons for easy access
 
