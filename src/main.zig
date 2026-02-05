@@ -2,9 +2,20 @@ const std = @import("std");
 const SDL = @import("sdl2");
 const ecs = @import("zflecs");
 
+const builtin = @import("builtin");
+
 const c = @cImport({
     @cInclude("stdio.h");
 });
+
+const collision = @cImport({
+    @cInclude("cute_c2/cute_c2.h");
+});
+
+const c2 = @import("cute_c2");
+const z2 = @import("zig_c2");
+
+const Bencher = @import("utils/benchmark.zig").Bencher;
 
 const engine_mod = @import("engine/core.zig");
 const input_mod = @import("engine/input.zig");
@@ -36,11 +47,51 @@ fn usize_to_f32(i: usize) f32 {
 const HEIGHT: usize = 768;
 const WIDTH: usize = 1024;
 
+fn runC2Loop(i: usize) void {
+    const circle = collision.c2Circle{ .p = .{ .x = @as(f32, @floatFromInt(i % 100)), .y = @as(f32, @floatFromInt(i % 100)) }, .r = 5.0 };
+    const box = collision.c2AABB{ .min = .{ .x = 0, .y = 0 }, .max = .{ .x = 20, .y = 20 } };
+    const collided = collision.c2CircletoAABB(circle, box) == 1;
+    std.mem.doNotOptimizeAway(collided);
+}
+
+fn runZ2Loop(i: usize) void {
+    const circle: z2.Circle = .{ .p = .{ .x = @as(f32, @floatFromInt(i % 100)), .y = @as(f32, @floatFromInt(i % 100)) }, .r = 5.0 };
+    const box: z2.AABB = .{ .min = .{ .x = 0, .y = 0 }, .max = .{ .x = 20, .y = 20 } };
+    const collided = z2.circleToAABB(circle, box);
+    std.mem.doNotOptimizeAway(collided);
+}
+
 pub fn main() !void {
     var engine = try engine_mod.Engine.init(WIDTH, HEIGHT);
     defer engine.deinit();
 
     var input = input_mod.InputState{};
+
+    // Benchmarking Setup
+    var bench = try Bencher(&.{
+        .{ .name = "C2 Optimized Loop", .func = &runC2Loop },
+        .{ .name = "Z2 Standard Loop", .func = &runZ2Loop },
+    }).init(10_000_000);
+    bench.runAll();
+
+    const circle = collision.c2Circle{ .p = .{ .x = 10, .y = 10 }, .r = 5.0 };
+    const box = collision.c2AABB{ .min = .{ .x = 0, .y = 0 }, .max = .{ .x = 20, .y = 20 } };
+
+    const c2_circle: c2.Circle = .{ .p = c2.vec2(10, 10), .r = 5.0 };
+    const c2_box = c2.AABB{ .min = .{ .x = 0, .y = 0 }, .max = .{ .x = 20, .y = 20 } };
+
+    const hit = collision.c2CircletoAABB(circle, box);
+    std.debug.print("Collision detected: {}\n", .{hit != 0});
+    if (c2.check(c2_circle, c2_box)) {
+        std.debug.print("Collision detected----!\n", .{});
+    }
+
+    // do the same for z2 lib
+    const z2_circle: z2.Circle = .{ .p = z2.Vec2{ .x = 10, .y = 10 }, .r = 5.0 };
+    const z2_box: z2.AABB = .{ .min = z2.Vec2{ .x = 0, .y = 0 }, .max = z2.Vec2{ .x = 20, .y = 20 } };
+    if (z2.circleToAABB(z2_circle, z2_box)) {
+        std.debug.print("Z2 Collision detected----!\n", .{});
+    }
 
     // Generate gradient ONCE and store it in background_buffer (using SIMD-optimized version)
     pixels_mod.makeGradientSIMD(engine.background_buffer, engine.width, engine.height);
