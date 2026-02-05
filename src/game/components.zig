@@ -1,11 +1,16 @@
 const SDL = @import("sdl2");
 const ecs = @import("zflecs");
+const c2 = @import("zig_c2");
 
 pub const Position = struct { x: f32, y: f32 };
 pub const Velocity = struct { x: f32, y: f32 };
-pub const Rectangle = struct { w: f32, h: f32, color: SDL.Color };
 
-pub const Box = struct { size: usize };
+pub const Renderable = struct { color: SDL.Color };
+
+pub const Collider = union(enum) {
+    box: c2.AABB,
+    circle: c2.Circle,
+};
 
 pub const Target = struct { x: f32, y: f32 };
 
