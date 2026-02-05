@@ -75,7 +75,10 @@ fn checkCollision(world: *ecs.world_t, test_aabb: c2.AABB) bool {
 
         for (0..q_it.count()) |i| {
             const ground_aabb = getWorldAABB(g_positions[i], g_colliders[i]);
-            if (c2.aabbToAABB(test_aabb, ground_aabb)) return true;
+            if (c2.aabbToAABB(test_aabb, ground_aabb)) {
+                ecs.iter_fini(&q_it);
+                return true;
+            }
         }
     }
     return false;
