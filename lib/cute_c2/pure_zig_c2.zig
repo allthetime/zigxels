@@ -193,6 +193,16 @@ pub const Plane = extern struct {
         const d = x.mulVec(h.origin()).dot(n);
         return .{ .n = n, .d = d };
     }
+
+    // The inverse transform is valuable for optimization. It is computationally cheaper to transform
+    // a simple **Plane** into the **Local Space** of a complex object (like a Polygon) than it is to
+    // transform all the vertices of that Polygon into World Space to check against the floor.
+
+    pub inline fn mulTransformT(x: Transform, h: Plane) Plane {
+        const n = x.r.mulVecT(h.n);
+        const d = x.mulVecT(h.origin()).dot(n);
+        return .{ .n = n, .d = d };
+    }
 };
 
 pub const Circle = extern struct {
