@@ -10,9 +10,9 @@ pub const Box = struct { size: usize };
 pub const Target = struct { x: f32, y: f32 };
 
 // tag!
-pub const Bullet = struct { _dummy: u8 };
-pub const Player = struct { _dummy: u8 };
-pub const Ground = struct { _dummy: u8 };
+pub const Bullet = struct {};
+pub const Player = struct {};
+pub const Ground = struct {};
 
 // singletons for easy access
 

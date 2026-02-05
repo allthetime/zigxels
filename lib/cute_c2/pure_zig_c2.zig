@@ -68,6 +68,32 @@ pub const Vec2 = extern struct {
     pub inline fn abs(self: Vec2) Vec2 {
         return .{ .x = @abs(self.x), .y = @abs(self.y) };
     }
+
+    pub inline fn det(self: Vec2, other: Vec2) f32 {
+        return self.x * other.y - self.y * other.x;
+    }
+
+    pub inline fn lerp(self: Vec2, other: Vec2, t: f32) Vec2 {
+        return self.add(other.sub(self).mul(t));
+    }
+
+    pub inline fn parallel(self: Vec2, other: Vec2, k_tol: f32) bool {
+        const k = self.len() / other.len();
+        const b = other.mul(k);
+        return @abs(self.x - b.x) < k_tol and @abs(self.y - b.y) < k_tol;
+    }
+
+    pub inline fn clamp(self: Vec2, lo: Vec2, hi: Vec2) Vec2 {
+        return self.min(hi).max(lo);
+    }
+
+    pub inline fn hmin(self: Vec2) f32 {
+        return @min(self.x, self.y);
+    }
+
+    pub inline fn hmax(self: Vec2) f32 {
+        return @max(self.x, self.y);
+    }
 };
 
 pub const Rotation = extern struct {
@@ -108,6 +134,14 @@ pub const Rotation = extern struct {
             .x = self.c * v.x + self.s * v.y,
             .y = -self.s * v.x + self.c * v.y,
         };
+    }
+
+    pub inline fn getX(self: Rotation) Vec2 {
+        return .{ .x = self.c, .y = self.s };
+    }
+
+    pub inline fn getY(self: Rotation) Vec2 {
+        return .{ .x = -self.s, .y = self.c };
     }
 };
 
@@ -203,6 +237,12 @@ pub const Plane = extern struct {
         const d = x.mulVecT(h.origin()).dot(n);
         return .{ .n = n, .d = d };
     }
+
+    // Helper for finding the intersection point between a segment a-b and a plane,
+    // given the distances of a and b from the plane (da, db).
+    pub inline fn intersect(a: Vec2, b: Vec2, da: f32, db: f32) Vec2 {
+        return a.add(b.sub(a).mul(da / (da - db)));
+    }
 };
 
 pub const Circle = extern struct {
@@ -273,13 +313,13 @@ pub const TOIResult = extern struct {
 };
 
 // Internal GJK / helper types
-const Proxy = struct {
+pub const Proxy = struct {
     radius: f32,
     count: i32,
     verts: [MAX_POLYGON_VERTS]Vec2,
 };
 
-const SimplexVertex = struct {
+pub const SimplexVertex = struct {
     sA: Vec2,
     sB: Vec2,
     p: Vec2,
@@ -288,7 +328,7 @@ const SimplexVertex = struct {
     iB: i32,
 };
 
-const Simplex = struct {
+pub const Simplex = struct {
     a: SimplexVertex,
     b: SimplexVertex,
     c: SimplexVertex,
@@ -297,7 +337,7 @@ const Simplex = struct {
     count: i32,
 };
 
-fn makeProxy(shape: *const Shape, p: *Proxy) void {
+pub fn makeProxy(shape: *const Shape, p: *Proxy) void {
     switch (shape.*) {
         .circle => |c| {
             p.radius = c.r;
@@ -819,7 +859,7 @@ pub fn rayToPoly(A: Ray, B: *const Poly, bx_ptr: ?*const Transform, out: *Raycas
 }
 
 // Helper to get vertices from AABB
-fn bbVerts(out: *[4]Vec2, bb: AABB) void {
+pub fn bbVerts(out: *[4]Vec2, bb: AABB) void {
     out[0] = bb.min;
     out[1] = Vec2.init(bb.max.x, bb.min.y);
     out[2] = bb.max;

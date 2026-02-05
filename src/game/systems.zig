@@ -193,10 +193,47 @@ pub fn ground_collision_y_system(it: *ecs.iter_t, positions: []Position, boxes: 
     collision_axis(it, positions, boxes, velocities, .y);
 }
 
-// pub fn shoot_bullet(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, targets: []Target) void {
-pub fn shoot_bullet(it: *ecs.iter_t) void {
-    _ = Engine.getEngine(it.world);
-    return;
+pub fn shoot_system(it: *ecs.iter_t, positions: []Position) void {
+    const world = it.world;
+    const input = ecs.singleton_get(world, input_mod.InputState) orelse return;
+    const bullets_group = ecs.singleton_get(world, components.BulletsGroup);
+
+    // If mouse not pressed, do nothing
+    if (!input.is_pressing) return;
+
+    for (positions) |pos| {
+        // Create Bullet Entity
+        const bullet = ecs.new_id(world);
+        ecs.add(world, bullet, Bullet); // TAG (no data)
+
+        // Add to Group (if exists)
+        if (bullets_group) |group| {
+            ecs.add_pair(world, bullet, ecs.ChildOf, group.entity);
+        }
+
+        // Physics Components
+        _ = ecs.set(world, bullet, Box, .{ .size = 10 });
+        _ = ecs.set(world, bullet, Position, pos);
+
+        // Rendering Component
+        _ = ecs.set(world, bullet, Rectangle, .{ .w = 20.0, .h = 20.0, .color = SDL.Color{ .r = 255, .g = 0, .b = 255, .a = 255 } });
+
+        // Calculate Velocity
+        const mouse_x = @as(f32, @floatFromInt(input.mouse_x));
+        const mouse_y = @as(f32, @floatFromInt(input.mouse_y));
+        const dx = mouse_x - pos.x;
+        const dy = mouse_y - pos.y;
+        const dist = @sqrt(dx * dx + dy * dy);
+
+        if (dist > 0) {
+            _ = ecs.set(world, bullet, Velocity, .{
+                .x = (dx / dist) * BULLET_SPEED,
+                .y = (dy / dist) * BULLET_SPEED,
+            });
+        } else {
+            _ = ecs.set(world, bullet, Velocity, .{ .x = 0, .y = 0 });
+        }
+    }
 }
 
 fn f32_to_i32(value: f32) i32 {

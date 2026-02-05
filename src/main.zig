@@ -61,12 +61,7 @@ fn runZ2Loop(i: usize) void {
     std.mem.doNotOptimizeAway(collided);
 }
 
-pub fn main() !void {
-    var engine = try engine_mod.Engine.init(WIDTH, HEIGHT);
-    defer engine.deinit();
-
-    var input = input_mod.InputState{};
-
+fn tests() void {
     // Benchmarking Setup
     var bench = try Bencher(&.{
         .{ .name = "C2 Optimized Loop", .func = &runC2Loop },
@@ -92,6 +87,13 @@ pub fn main() !void {
     if (z2.circleToAABB(z2_circle, z2_box)) {
         std.debug.print("Z2 Collision detected----!\n", .{});
     }
+}
+
+pub fn main() !void {
+    var engine = try engine_mod.Engine.init(WIDTH, HEIGHT);
+    defer engine.deinit();
+
+    var input = input_mod.InputState{};
 
     // Generate gradient ONCE and store it in background_buffer (using SIMD-optimized version)
     pixels_mod.makeGradientSIMD(engine.background_buffer, engine.width, engine.height);
@@ -106,7 +108,6 @@ pub fn main() !void {
 
     var last_time = SDL.getTicks64();
     var cursor_size: f32 = 20.0;
-    var shooting = false;
 
     // Bullets Group to parent all bullets for easy dismissal and effect
 
@@ -119,92 +120,38 @@ pub fn main() !void {
         input.update();
 
         _ = ecs.singleton_set(world, input_mod.InputState, input);
-
         const dt = calculateDeltaTime(&last_time);
 
-        // Handle Mouse Press to Set Target
-        if (input.is_pressing) {
-            // _ = ecs.set(world, player, Target, .{ .x = @as(f32, @floatFromInt(input.mouse_x)), .y = @as(f32, @floatFromInt(input.mouse_y)) });
-        }
-
-        if (input.is_pressing) {
-            //
-            // how the fuck do i make "Bullet01"??
-            //
-
-            // if (!shooting) {
-            if (true) {
-                shooting = true;
-                // bullet_count += 1;
-                // const bname = std.fmt.bufPrintZ(&buff2, "Bullet{}", .{bullet_count}) catch unreachable;
-                // std.debug.print("{s}\n", .{bname});
-
-                // const null_terminated = try allocator.dupeZ(u8, bname);
-                // defer allocator.free(null_terminated);
-
-                const bullet = ecs.new_id(world);
-
-                if (ecs.singleton_get(world, components.BulletsGroup)) |group| {
-                    _ = ecs.add_pair(world, bullet, ecs.ChildOf, group.entity);
-                }
-                const p = ecs.lookup(world, "Player");
-                const player_position = ecs.get(world, p, Position);
-                if (player_position) |pp| {
-                    _ = ecs.set(world, bullet, Bullet, .{ ._dummy = 0 });
-                    _ = ecs.set(world, bullet, Box, .{ .size = 10 });
-                    _ = ecs.set(world, bullet, Position, pp.*);
-
-                    const mouse_x = @as(f32, @floatFromInt(input.mouse_x));
-                    const mouse_y = @as(f32, @floatFromInt(input.mouse_y));
-                    const dx = mouse_x - pp.x;
-                    const dy = mouse_y - pp.y;
-                    const dist = @sqrt(dx * dx + dy * dy);
-
-                    var vx: f32 = 0;
-                    var vy: f32 = 0;
-                    if (dist > 0) {
-                        vx = (dx / dist) * game.BULLET_SPEED;
-                        vy = (dy / dist) * game.BULLET_SPEED;
-                    }
-
-                    _ = ecs.set(world, bullet, Velocity, .{ .x = vx, .y = vy });
-                    _ = ecs.set(world, bullet, Rectangle, .{ .w = 20.0, .h = 20.0, .color = SDL.Color{ .r = 255, .g = 0, .b = 255, .a = 255 } });
-                } else {}
-            }
-        } else {
-            shooting = false;
-        }
-        // Update ECS (Physics/Logic/Render)
-
-        // Clear & Draw Texture (Pixel Layer)
         try engine.renderer.setColorRGB(0xF7, 0xA4, 0x1D); // Background color
         try engine.renderer.clear();
         try engine.updateTexture();
-
-        // REPLACE the expensive makeGradient call with fast memory copy
         engine.restoreBackground();
+
         _ = ecs.progress(world, dt);
 
-        // Render Cursor (Manual for now)
         const cursorSize = updateCursorSize(input.is_pressing, &cursor_size);
         try renderMouseCursor(engine.renderer, &input, cursorSize);
 
         if (input.reset) {
-            // delete all bullets
-            if (ecs.singleton_get(world, components.BulletsGroup)) |group| {
-                // Delete everything linked to this parent
-                ecs.delete_with(world, ecs.pair(ecs.ChildOf, group.entity));
-            }
-            if (ecs.singleton_get(world, components.PlayerContainer)) |pc| {
-                const player_entity = pc.entity;
-                // Reset Player Position
-                _ = ecs.set(world, player_entity, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 2.0 });
-                _ = ecs.set(world, player_entity, Velocity, .{ .x = 0.0, .y = 0.0 });
-            }
+            reset_game(world, &engine);
             input.reset = false;
         }
 
         engine.renderer.present();
+    }
+}
+
+fn reset_game(world: *ecs.world_t, engine: *engine_mod.Engine) void {
+    // delete all bullets
+    if (ecs.singleton_get(world, components.BulletsGroup)) |group| {
+        // Delete everything linked to this parent
+        ecs.delete_with(world, ecs.pair(ecs.ChildOf, group.entity));
+    }
+    if (ecs.singleton_get(world, components.PlayerContainer)) |pc| {
+        const player_entity = pc.entity;
+        // Reset Player Position
+        _ = ecs.set(world, player_entity, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 2.0 });
+        _ = ecs.set(world, player_entity, Velocity, .{ .x = 0.0, .y = 0.0 });
     }
 }
 
@@ -254,11 +201,11 @@ fn register_components(world: *ecs.world_t) void {
     ecs.COMPONENT(world, Velocity);
     ecs.COMPONENT(world, Rectangle);
     ecs.COMPONENT(world, Target);
-    ecs.COMPONENT(world, Bullet);
-    ecs.COMPONENT(world, Player);
     ecs.COMPONENT(world, BulletsGroup);
     ecs.COMPONENT(world, Box);
-    ecs.COMPONENT(world, Ground);
+    ecs.TAG(world, Bullet);
+    ecs.TAG(world, Player);
+    ecs.TAG(world, Ground);
     ecs.COMPONENT(world, components.PlayerContainer);
 }
 
@@ -267,9 +214,13 @@ fn register_systems(world: *ecs.world_t) void {
         .{ .id = ecs.id(Player) },
     });
 
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "shoot", ecs.OnUpdate, game.shoot_system, &.{
+        .{ .id = ecs.id(Player) },
+        .{ .id = ecs.id(Position) }, // (Redundant if inferred, but harmless)
+    });
+
     _ = ecs.ADD_SYSTEM(world, "seek", ecs.OnUpdate, game.seek_system);
     _ = ecs.ADD_SYSTEM(world, "gravity", ecs.OnUpdate, game.gravity_system);
-    _ = ecs.ADD_SYSTEM(world, "shoot", ecs.OnUpdate, game.shoot_bullet);
 
     // Separated Axis Movement & Collision
     _ = ecs.ADD_SYSTEM(world, "move_x", ecs.OnUpdate, game.move_x_system);
@@ -294,13 +245,13 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) void 
     _ = ecs.set(world, player, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 2.0 });
     _ = ecs.set(world, player, Velocity, .{ .x = 0.0, .y = 0.0 });
     _ = ecs.set(world, player, Rectangle, .{ .w = 50.0, .h = 50.0, .color = SDL.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
-    _ = ecs.set(world, player, Player, .{ ._dummy = 0 });
+    _ = ecs.add(world, player, Player);
     _ = ecs.set(world, player, Box, .{ .size = 25 });
 
     _ = ecs.singleton_set(world, components.PlayerContainer, .{ .entity = player });
 
     const ground1 = ecs.new_entity(world, "Ground1");
-    _ = ecs.set(world, ground1, Ground, .{ ._dummy = 0 });
+    _ = ecs.add(world, ground1, Ground);
     _ = ecs.set(world, ground1, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 1.5 });
     _ = ecs.set(world, ground1, Box, .{ .size = 25 });
 }
