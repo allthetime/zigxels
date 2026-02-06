@@ -17,6 +17,7 @@ pub const Target = struct { x: f32, y: f32 };
 // tag!
 pub const Bullet = struct {};
 pub const Player = struct {};
+pub const Gun = struct {};
 pub const Ground = struct {};
 pub const PhysicsBody = struct {};
 
@@ -28,4 +29,8 @@ pub const BulletsGroup = struct {
 
 pub const PlayerContainer = struct {
     entity: ecs.entity_t,
+};
+
+pub const PhysicsState = struct {
+    ground_query: *ecs.query_t,
 };

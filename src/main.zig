@@ -37,9 +37,14 @@ const Renderable = components.Renderable;
 const Bullet = components.Bullet;
 const Player = components.Player;
 const Ground = components.Ground;
+const Gun = components.Gun;
 
 // groups
 const BulletsGroup = components.BulletsGroup;
+
+// state singletons
+const PlayerContainer = components.PlayerContainer;
+const PhysicsState = components.PhysicsState;
 
 fn usize_to_f32(i: usize) f32 {
     return @as(f32, @floatFromInt(i));
@@ -151,7 +156,7 @@ pub fn main() !void {
                 // Delete everything linked to this parent
                 ecs.delete_with(world, ecs.pair(ecs.ChildOf, group.entity));
             }
-            if (ecs.singleton_get(world, components.PlayerContainer)) |pc| {
+            if (ecs.singleton_get(world, PlayerContainer)) |pc| {
                 const player_entity = pc.entity;
                 // Reset Player Position
                 _ = ecs.set(world, player_entity, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 2.0 });
@@ -212,13 +217,15 @@ fn register_components(world: *ecs.world_t) void {
     ecs.COMPONENT(world, Target);
     ecs.COMPONENT(world, BulletsGroup);
     ecs.COMPONENT(world, Collider);
-    ecs.COMPONENT(world, components.PlayerContainer);
+    ecs.COMPONENT(world, PlayerContainer);
+    ecs.COMPONENT(world, PhysicsState);
 
     // TAGS (size 0)
     ecs.TAG(world, Bullet);
     ecs.TAG(world, Player);
     ecs.TAG(world, Ground);
     ecs.TAG(world, PhysicsBody);
+    ecs.TAG(world, Gun);
 }
 
 fn register_systems(world: *ecs.world_t) void {
@@ -240,10 +247,14 @@ fn register_systems(world: *ecs.world_t) void {
 
     // Shoot system (explicit filter for Player)
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "shoot", ecs.OnUpdate, game.shoot_system, &.{
-        .{ .id = ecs.id(Player) },
+        .{ .id = ecs.id(Gun) },
         .{ .id = ecs.id(Position) },
     });
 
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "gun_aim", ecs.OnUpdate, game.gun_aim_system, &.{
+        .{ .id = ecs.id(Gun) },
+        .{ .id = ecs.id(Position) },
+    });
     // Separated Axis Movement & Collision (Generic Physics: Requires PhysicsBody)
 
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "move_x", ecs.OnUpdate, game.move_x_system, &.{
@@ -291,11 +302,45 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) void 
     _ = ecs.set(world, player, Collider, .{ .box = .{ .min = .{ .x = -25, .y = -25 }, .max = .{ .x = 25, .y = 25 } } });
     _ = ecs.set(world, player, Renderable, .{ .color = SDL.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
     ecs.add(world, player, Player);
-    _ = ecs.singleton_set(world, components.PlayerContainer, .{ .entity = player });
+    _ = ecs.singleton_set(world, PlayerContainer, .{ .entity = player });
 
-    const ground1 = ecs.new_entity(world, "Ground1");
+    // we have a gun
+    // this element is positioned relative to the player and is a child of the player
+    const gun = ecs.new_entity(world, "Gun");
+    // For simplicity we write gun world position; gun_aim_system will overwrite it at runtime.
+    _ = ecs.set(world, gun, Position, .{ .x = 0.0, .y = 0.0 });
+    _ = ecs.set(world, gun, Renderable, .{ .color = SDL.Color{ .r = 0, .g = 0, .b = 255, .a = 255 } });
+    // Small box collider so it renders via render_system (width x height)
+    _ = ecs.set(world, gun, Collider, .{
+        .box = .{ .min = .{ .x = -4, .y = -4 }, .max = .{ .x = 4, .y = 4 } },
+    });
+    ecs.add(world, gun, Gun);
+    ecs.add(world, gun, PhysicsBody);
+    _ = ecs.add_pair(world, gun, ecs.ChildOf, player);
+
+    const ground1 = ecs.new_id(world);
     ecs.add(world, ground1, Ground);
     _ = ecs.set(world, ground1, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 1.5 });
-    _ = ecs.set(world, ground1, Collider, .{ .box = .{ .min = .{ .x = -25, .y = -25 }, .max = .{ .x = 25, .y = 25 } } });
+    _ = ecs.set(world, ground1, Collider, .{ .box = .{ .min = .{ .x = -150, .y = -25 }, .max = .{ .x = 150, .y = 25 } } });
     _ = ecs.set(world, ground1, Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
+
+    const ground2 = ecs.new_id(world);
+    ecs.add(world, ground2, Ground);
+    _ = ecs.set(world, ground2, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0 - 200, .y = @as(f32, @floatFromInt(engine.height)) / 1.5 - 100 });
+    _ = ecs.set(world, ground2, Collider, .{ .box = .{ .min = .{ .x = -100, .y = -10 }, .max = .{ .x = 100, .y = 10 } } });
+    _ = ecs.set(world, ground2, Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
+
+    const ground3 = ecs.new_id(world);
+    ecs.add(world, ground3, Ground);
+    _ = ecs.set(world, ground3, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0 + 100, .y = @as(f32, @floatFromInt(engine.height)) / 1.5 - 60 });
+    _ = ecs.set(world, ground3, Collider, .{ .box = .{ .min = .{ .x = -50, .y = -10 }, .max = .{ .x = 50, .y = 10 } } });
+    _ = ecs.set(world, ground3, Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
+
+    // Cache the Ground Query for Physics Systems
+    var desc = ecs.query_desc_t{};
+    desc.terms[0] = .{ .id = ecs.id(Ground) };
+    desc.terms[1] = .{ .id = ecs.id(Position), .inout = .In };
+    desc.terms[2] = .{ .id = ecs.id(Collider), .inout = .In };
+    const ground_q = ecs.query_init(world, &desc) catch unreachable;
+    _ = ecs.singleton_set(world, components.PhysicsState, .{ .ground_query = ground_q });
 }

@@ -61,14 +61,9 @@ fn getWorldAABB(pos: Position, collider: Collider) c2.AABB {
 
 /// Helper to check if an AABB collides with ANY Ground entity
 fn checkCollision(world: *ecs.world_t, test_aabb: c2.AABB) bool {
-    var desc = ecs.query_desc_t{};
-    desc.terms[0] = .{ .id = ecs.id(Ground) };
-    desc.terms[1] = .{ .id = ecs.id(Position) };
-    desc.terms[2] = .{ .id = ecs.id(Collider) };
-    const query = ecs.query_init(world, &desc) catch return false;
-    defer ecs.query_fini(query);
+    const phys = ecs.singleton_get(world, components.PhysicsState) orelse return false;
+    var q_it = ecs.query_iter(world, phys.ground_query);
 
-    var q_it = ecs.query_iter(world, query);
     while (ecs.query_next(&q_it)) {
         const g_positions = ecs.field(&q_it, Position, 1).?;
         const g_colliders = ecs.field(&q_it, Collider, 2).?;
@@ -197,8 +192,17 @@ pub fn player_controller_system(it: *ecs.iter_t, positions: []Position, velociti
         // 2. Vertical Input (Gravity + Jump)
         vel.y += GRAVITY * dt;
         if (input.pressed_directions.up) {
-            // Jetpack / Jump
-            vel.y = -PLAYER_SPEED;
+            // Jump only if on ground (simple check: if we are colliding with ground below)
+            //
+            // This is a simple way to check if we're on the ground: we move the player down slightly and see if it collides. If it does, we can jump.
+            // Note: This is a common technique in platformers to allow jumping only when the player is "grounded".
+            // We only check for collision below the player to allow jumping even if we're touching a wall on the side.
+            // We can adjust the offset (e.g., 1 pixel) to be more or less strict about what counts as "grounded".
+            const test_pos = Position{ .x = pos.x, .y = pos.y + 1 };
+            const test_aabb = getWorldAABB(test_pos, col);
+            if (checkCollision(world, test_aabb)) {
+                vel.y = -PLAYER_SPEED * 1.5;
+            }
         } else if (input.pressed_directions.down) {
             vel.y = PLAYER_SPEED;
         }
@@ -226,17 +230,20 @@ pub fn player_controller_system(it: *ecs.iter_t, positions: []Position, velociti
 fn collision_axis(it: *ecs.iter_t, positions: []Position, colliders: []Collider, velocities: []Velocity, comptime axis: Axis) void {
     const world = it.world;
 
-    var desc = ecs.query_desc_t{};
-    desc.terms[0] = .{ .id = ecs.id(Ground) };
-    desc.terms[1] = .{ .id = ecs.id(Position) };
-    desc.terms[2] = .{ .id = ecs.id(Collider) };
-    const query = ecs.query_init(world, &desc) catch return;
-    defer ecs.query_fini(query);
+    // var desc = ecs.query_desc_t{};
+    // desc.terms[0] = .{ .id = ecs.id(Ground) };
+    // desc.terms[1] = .{ .id = ecs.id(Position) };
+    // desc.terms[2] = .{ .id = ecs.id(Collider) };
+    // const query = ecs.query_init(world, &desc) catch return;
+    // defer ecs.query_fini(query);
+
+    const phys = ecs.singleton_get(world, components.PhysicsState) orelse return;
 
     for (positions, colliders, velocities) |*pos, col, *vel| {
         const entity_aabb = getWorldAABB(pos.*, col);
 
-        var q_it = ecs.query_iter(world, query);
+        var q_it = ecs.query_iter(world, phys.ground_query);
+
         while (ecs.query_next(&q_it)) {
             const g_positions = ecs.field(&q_it, Position, 1).?;
             const g_colliders = ecs.field(&q_it, Collider, 2).?;
@@ -319,6 +326,68 @@ pub fn shoot_system(it: *ecs.iter_t, positions: []Position) void {
             });
         } else {
             _ = ecs.set(world, bullet, Velocity, .{ .x = 0, .y = 0 });
+        }
+    }
+}
+
+pub fn gun_aim_system(it: *ecs.iter_t, gun_positions: []Position) void {
+    const world = it.world;
+    const input = ecs.singleton_get(world, input_mod.InputState) orelse return;
+
+    // Find the player's Position (we assume exactly one player)
+    // // this setup will be good for MULTIPLE PLAYERS
+    // var desc = ecs.query_desc_t{};
+    // desc.terms[0] = .{ .id = ecs.id(Player) };
+    // desc.terms[1] = .{ .id = ecs.id(Position) };
+    // const query = ecs.query_init(world, &desc) catch return;
+    // defer ecs.query_fini(query);
+
+    // var player_pos: Position = .{ .x = 0.0, .y = 0.0 };
+    // var found_player = false;
+
+    // var q_it = ecs.query_iter(world, query);
+    // while (ecs.query_next(&q_it)) {
+    //     const p_positions = ecs.field(&q_it, Position, 1).?;
+    //     // there should be only one player, read the first
+    //     if (q_it.count() > 0) {
+    //         player_pos = p_positions[0];
+    //         found_player = true;
+    //     }
+    //     // ecs.iter_fini(&q_it);
+    // }
+    // if (!found_player) return;
+
+    // 1. Get the player entity ID from the singleton
+    const player_container = ecs.singleton_get(world, components.PlayerContainer) orelse return;
+    const player_entity = player_container.entity;
+
+    // 2. Get the player's position directly
+    const player_pos = ecs.get(world, player_entity, Position) orelse return;
+
+    const mouse_x = @as(f32, @floatFromInt(input.mouse_x));
+    const mouse_y = @as(f32, @floatFromInt(input.mouse_y));
+
+    const GUN_RADIUS: f32 = 40.0;
+
+    for (gun_positions) |*gpos| {
+        const dx: f32 = mouse_x - player_pos.x;
+        const dy: f32 = mouse_y - player_pos.y;
+        const dist: f32 = @sqrt(dx * dx + dy * dy);
+
+        if (dist == 0.0) {
+            // Mouse exactly at player center -> gun centered on player
+            gpos.x = player_pos.x;
+            gpos.y = player_pos.y;
+        } else if (dist <= GUN_RADIUS) {
+            // Mouse within radius -> gun snaps to mouse world position
+            gpos.x = mouse_x;
+            gpos.y = mouse_y;
+        } else {
+            // Outside radius -> clamp to circle around player
+            const nx = dx / dist;
+            const ny = dy / dist;
+            gpos.x = player_pos.x + nx * GUN_RADIUS;
+            gpos.y = player_pos.y + ny * GUN_RADIUS;
         }
     }
 }
