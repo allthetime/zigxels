@@ -255,31 +255,17 @@ fn register_systems(world: *ecs.world_t) void {
         .{ .id = ecs.id(Gun) },
         .{ .id = ecs.id(Position) },
     });
-    // Separated Axis Movement & Collision (Generic Physics: Requires PhysicsBody)
 
-    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "move_x", ecs.OnUpdate, game.move_x_system, &.{
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "physics_movement", ecs.OnUpdate, game.physics_movement_system, &.{
         .{ .id = ecs.id(Position) },
         .{ .id = ecs.id(Velocity) },
         .{ .id = ecs.id(PhysicsBody) },
     });
 
-    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "ground_collision_x", ecs.OnUpdate, game.ground_collision_x_system, &.{
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "physics_collision", ecs.OnUpdate, game.physics_collision_system, &.{
         .{ .id = ecs.id(Position) },
+        .{ .id = ecs.id(Velocity) },
         .{ .id = ecs.id(Collider) },
-        .{ .id = ecs.id(Velocity) },
-        .{ .id = ecs.id(PhysicsBody) },
-    });
-
-    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "move_y", ecs.OnUpdate, game.move_y_system, &.{
-        .{ .id = ecs.id(Position) },
-        .{ .id = ecs.id(Velocity) },
-        .{ .id = ecs.id(PhysicsBody) },
-    });
-
-    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "ground_collision_y", ecs.OnUpdate, game.ground_collision_y_system, &.{
-        .{ .id = ecs.id(Position) },
-        .{ .id = ecs.id(Collider) },
-        .{ .id = ecs.id(Velocity) },
         .{ .id = ecs.id(PhysicsBody) },
     });
 

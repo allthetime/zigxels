@@ -89,22 +89,6 @@ pub fn gravity_system(it: *ecs.iter_t, velocities: []Velocity) void {
     }
 }
 
-fn move_axis(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, comptime axis: Axis) void {
-    const dt = it.delta_time;
-
-    for (positions, velocities) |*pos, vel| {
-        @field(pos, @tagName(axis)) += @field(vel, @tagName(axis)) * dt;
-    }
-}
-
-pub fn move_x_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity) void {
-    move_axis(it, positions, velocities, .x);
-}
-
-pub fn move_y_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity) void {
-    move_axis(it, positions, velocities, .y);
-}
-
 pub fn player_clamp_system(it: *ecs.iter_t, positions: []Position) void {
     const engine = Engine.getEngine(it.world);
     const w = @as(f32, @floatFromInt(engine.width));
@@ -227,60 +211,6 @@ pub fn player_controller_system(it: *ecs.iter_t, positions: []Position, velociti
     }
 }
 
-fn collision_axis(it: *ecs.iter_t, positions: []Position, colliders: []Collider, velocities: []Velocity, comptime axis: Axis) void {
-    const world = it.world;
-
-    // var desc = ecs.query_desc_t{};
-    // desc.terms[0] = .{ .id = ecs.id(Ground) };
-    // desc.terms[1] = .{ .id = ecs.id(Position) };
-    // desc.terms[2] = .{ .id = ecs.id(Collider) };
-    // const query = ecs.query_init(world, &desc) catch return;
-    // defer ecs.query_fini(query);
-
-    const phys = ecs.singleton_get(world, components.PhysicsState) orelse return;
-
-    for (positions, colliders, velocities) |*pos, col, *vel| {
-        const entity_aabb = getWorldAABB(pos.*, col);
-
-        var q_it = ecs.query_iter(world, phys.ground_query);
-
-        while (ecs.query_next(&q_it)) {
-            const g_positions = ecs.field(&q_it, Position, 1).?;
-            const g_colliders = ecs.field(&q_it, Collider, 2).?;
-
-            for (0..q_it.count()) |j| {
-                const gp = g_positions[j];
-                const gc = g_colliders[j];
-                const ground_aabb = getWorldAABB(gp, gc);
-
-                if (c2.aabbToAABB(entity_aabb, ground_aabb)) {
-                    // Calculate overlap manually from AABBs
-                    const overlap_x = @min(entity_aabb.max.x, ground_aabb.max.x) - @max(entity_aabb.min.x, ground_aabb.min.x);
-                    const overlap_y = @min(entity_aabb.max.y, ground_aabb.max.y) - @max(entity_aabb.min.y, ground_aabb.min.y);
-
-                    // Ignore shallow collision on the perpendicular axis
-                    const other_overlap = if (axis == .x) overlap_y else overlap_x;
-                    if (other_overlap < 0.2) continue;
-
-                    const diff = if (axis == .x) (pos.x - gp.x) else (pos.y - gp.y);
-                    const overlap = if (axis == .x) overlap_x else overlap_y;
-
-                    @field(pos, @tagName(axis)) += if (diff > 0) overlap else -overlap;
-                    @field(vel, @tagName(axis)) = 0;
-                }
-            }
-        }
-    }
-}
-
-pub fn ground_collision_x_system(it: *ecs.iter_t, positions: []Position, colliders: []Collider, velocities: []Velocity) void {
-    collision_axis(it, positions, colliders, velocities, .x);
-}
-
-pub fn ground_collision_y_system(it: *ecs.iter_t, positions: []Position, colliders: []Collider, velocities: []Velocity) void {
-    collision_axis(it, positions, colliders, velocities, .y);
-}
-
 pub fn shoot_system(it: *ecs.iter_t, positions: []Position) void {
     const world = it.world;
     const input = ecs.singleton_get(world, input_mod.InputState) orelse return;
@@ -389,5 +319,52 @@ pub fn gun_aim_system(it: *ecs.iter_t, gun_positions: []Position) void {
             gpos.x = player_pos.x + nx * GUN_RADIUS;
             gpos.y = player_pos.y + ny * GUN_RADIUS;
         }
+    }
+}
+
+pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, colliders: []Collider) void {
+    const world = it.world;
+    const phys = ecs.singleton_get(world, components.PhysicsState) orelse return;
+
+    var q_it = ecs.query_iter(world, phys.ground_query);
+    while (ecs.query_next(&q_it)) {
+        const g_positions = ecs.field(&q_it, Position, 1).?;
+        const g_colliders = ecs.field(&q_it, Collider, 2).?;
+
+        for (0..q_it.count()) |i| {
+            const gp = g_positions[i];
+            const gc = g_colliders[i];
+            const ground_aabb = getWorldAABB(gp, gc);
+
+            for (positions, velocities, colliders) |*pos, *vel, col| {
+                const entity_aabb = getWorldAABB(pos.*, col);
+
+                if (!c2.aabbToAABB(entity_aabb, ground_aabb)) continue;
+
+                var m: c2.Manifold = undefined;
+                c2.aabbToAABBManifold(entity_aabb, ground_aabb, &m);
+
+                if (m.count > 0) {
+                    const depth = m.depths[0];
+                    const n = m.n;
+
+                    // Push out of collision
+                    pos.x -= n.x * depth;
+                    pos.y -= n.y * depth;
+
+                    // Stop velocity in the direction of the normal (slide)
+                    if (n.x != 0) vel.x = 0;
+                    if (n.y != 0) vel.y = 0;
+                }
+            }
+        }
+    }
+}
+
+pub fn physics_movement_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity) void {
+    const dt = it.delta_time;
+    for (positions, velocities) |*pos, vel| {
+        pos.x += vel.x * dt;
+        pos.y += vel.y * dt;
     }
 }
