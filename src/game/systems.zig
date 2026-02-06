@@ -232,9 +232,14 @@ pub fn shoot_system(it: *ecs.iter_t, positions: []Position) void {
 
         // Physics Components (10x10 Box centered)
         // Local AABB: -5 to 5
+        // _ = ecs.set(world, bullet, Collider, .{
+        //     .box = .{ .min = .{ .x = -5, .y = -5 }, .max = .{ .x = 5, .y = 5 } },
+        // });
+
         _ = ecs.set(world, bullet, Collider, .{
-            .box = .{ .min = .{ .x = -5, .y = -5 }, .max = .{ .x = 5, .y = 5 } },
+            .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 5 },
         });
+
         _ = ecs.set(world, bullet, Position, pos);
 
         // Rendering Component (Purple)
@@ -260,32 +265,72 @@ pub fn shoot_system(it: *ecs.iter_t, positions: []Position) void {
     }
 }
 
+// pub fn gun_aim_system(it: *ecs.iter_t, gun_positions: []Position) void {
+//     const world = it.world;
+//     const input = ecs.singleton_get(world, input_mod.InputState) orelse return;
+
+//     // Find the player's Position (we assume exactly one player)
+//     // // this setup will be good for MULTIPLE PLAYERS
+//     // var desc = ecs.query_desc_t{};
+//     // desc.terms[0] = .{ .id = ecs.id(Player) };
+//     // desc.terms[1] = .{ .id = ecs.id(Position) };
+//     // const query = ecs.query_init(world, &desc) catch return;
+//     // defer ecs.query_fini(query);
+
+//     // var player_pos: Position = .{ .x = 0.0, .y = 0.0 };
+//     // var found_player = false;
+
+//     // var q_it = ecs.query_iter(world, query);
+//     // while (ecs.query_next(&q_it)) {
+//     //     const p_positions = ecs.field(&q_it, Position, 1).?;
+//     //     // there should be only one player, read the first
+//     //     if (q_it.count() > 0) {
+//     //         player_pos = p_positions[0];
+//     //         found_player = true;
+//     //     }
+//     //     // ecs.iter_fini(&q_it);
+//     // }
+//     // if (!found_player) return;
+
+//     // 1. Get the player entity ID from the singleton
+//     const player_container = ecs.singleton_get(world, components.PlayerContainer) orelse return;
+//     const player_entity = player_container.entity;
+
+//     // 2. Get the player's position directly
+//     const player_pos = ecs.get(world, player_entity, Position) orelse return;
+
+//     const mouse_x = @as(f32, @floatFromInt(input.mouse_x));
+//     const mouse_y = @as(f32, @floatFromInt(input.mouse_y));
+
+//     const GUN_RADIUS: f32 = 40.0;
+
+//     for (gun_positions) |*gpos| {
+//         const dx: f32 = mouse_x - player_pos.x;
+//         const dy: f32 = mouse_y - player_pos.y;
+//         const dist: f32 = @sqrt(dx * dx + dy * dy);
+
+//         if (dist == 0.0) {
+//             // Mouse exactly at player center -> gun centered on player
+//             gpos.x = player_pos.x;
+//             gpos.y = player_pos.y;
+//         } else if (dist <= GUN_RADIUS) {
+//             // Mouse within radius -> gun snaps to mouse world position
+//             gpos.x = mouse_x;
+//             gpos.y = mouse_y;
+//         } else {
+//             // Outside radius -> clamp to circle around player
+//             const nx = dx / dist;
+//             const ny = dy / dist;
+//             gpos.x = player_pos.x + nx * GUN_RADIUS;
+//             gpos.y = player_pos.y + ny * GUN_RADIUS;
+//         }
+//     }
+// }
+
 pub fn gun_aim_system(it: *ecs.iter_t, gun_positions: []Position) void {
     const world = it.world;
     const input = ecs.singleton_get(world, input_mod.InputState) orelse return;
-
-    // Find the player's Position (we assume exactly one player)
-    // // this setup will be good for MULTIPLE PLAYERS
-    // var desc = ecs.query_desc_t{};
-    // desc.terms[0] = .{ .id = ecs.id(Player) };
-    // desc.terms[1] = .{ .id = ecs.id(Position) };
-    // const query = ecs.query_init(world, &desc) catch return;
-    // defer ecs.query_fini(query);
-
-    // var player_pos: Position = .{ .x = 0.0, .y = 0.0 };
-    // var found_player = false;
-
-    // var q_it = ecs.query_iter(world, query);
-    // while (ecs.query_next(&q_it)) {
-    //     const p_positions = ecs.field(&q_it, Position, 1).?;
-    //     // there should be only one player, read the first
-    //     if (q_it.count() > 0) {
-    //         player_pos = p_positions[0];
-    //         found_player = true;
-    //     }
-    //     // ecs.iter_fini(&q_it);
-    // }
-    // if (!found_player) return;
+    const phys = ecs.singleton_get(world, components.PhysicsState);
 
     // 1. Get the player entity ID from the singleton
     const player_container = ecs.singleton_get(world, components.PlayerContainer) orelse return;
@@ -304,21 +349,88 @@ pub fn gun_aim_system(it: *ecs.iter_t, gun_positions: []Position) void {
         const dy: f32 = mouse_y - player_pos.y;
         const dist: f32 = @sqrt(dx * dx + dy * dy);
 
-        if (dist == 0.0) {
-            // Mouse exactly at player center -> gun centered on player
-            gpos.x = player_pos.x;
-            gpos.y = player_pos.y;
-        } else if (dist <= GUN_RADIUS) {
-            // Mouse within radius -> gun snaps to mouse world position
-            gpos.x = mouse_x;
-            gpos.y = mouse_y;
-        } else {
-            // Outside radius -> clamp to circle around player
+        // Calculate desired distance (clamped to radius)
+        var aim_dist = dist;
+        if (aim_dist > GUN_RADIUS) aim_dist = GUN_RADIUS;
+
+        // Default to aiming at the target distance
+        var final_dist = aim_dist;
+
+        if (dist > 0.001 and phys != null) {
+            // Normalized Direction
             const nx = dx / dist;
             const ny = dy / dist;
-            gpos.x = player_pos.x + nx * GUN_RADIUS;
-            gpos.y = player_pos.y + ny * GUN_RADIUS;
+
+            // Ray from Player Center towards Mouse
+            const ray = c2.Ray{
+                .p = c2.Vec2{ .x = player_pos.x, .y = player_pos.y },
+                .d = c2.Vec2{ .x = nx, .y = ny },
+                .t = aim_dist, // Only check as far as the gun reaches
+            };
+
+            // Check against all Ground objects
+            var q_it = ecs.query_iter(world, phys.?.ground_query);
+            while (ecs.query_next(&q_it)) {
+                const g_positions = ecs.field(&q_it, Position, 1).?;
+                const g_colliders = ecs.field(&q_it, Collider, 2).?;
+
+                for (0..q_it.count()) |i| {
+                    const gp = g_positions[i];
+                    // Get the world AABB for this ground piece
+                    const ground_aabb = getWorldAABB(gp, g_colliders[i]);
+
+                    var cast_out: c2.Raycast = undefined;
+                    // Raycast against the AABB
+                    if (c2.rayToAABB(ray, ground_aabb, &cast_out)) {
+                        // If we hit something closer, shorten the gun distance
+                        if (cast_out.t < final_dist) {
+                            final_dist = cast_out.t;
+                        }
+                    }
+                }
+            }
+
+            // Set final position based on shortest distance (clamped by wall or radius)
+            gpos.x = player_pos.x + nx * final_dist;
+            gpos.y = player_pos.y + ny * final_dist;
+        } else {
+            // No direction (mouse on player), default to player center
+            gpos.x = player_pos.x;
+            gpos.y = player_pos.y;
         }
+    }
+}
+
+fn resolveBody(pos: *Position, vel: *Velocity, n: c2.Vec2, depth: f32) void {
+    // 1. Un-penetrate (Push out)
+    // We add a tiny epsilon (0.01) to prevent floating point re-penetration
+    const push = depth + 0.01;
+    pos.x -= n.x * push;
+    pos.y -= n.y * push;
+
+    // 2. Velocity Reflection (Bounce)
+    // n points from Entity -> Wall.
+    // If v_dot_n > 0, we are moving INTO the wall.
+    const v_dot_n = (vel.x * n.x) + (vel.y * n.y);
+    if (v_dot_n > 0) {
+        // Restitution: 0.8 = Bouncy, 0.1 = Dead weight
+        const restitution: f32 = 0.9;
+
+        // Friction: 0.9 = Rough, 1.0 = No Friction
+        const friction: f32 = 0.99;
+
+        // vn = component of velocity perpendicular to wall (Impact velocity)
+        const vn_x = n.x * v_dot_n;
+        const vn_y = n.y * v_dot_n;
+
+        // vt = component of velocity parallel to wall (Slide velocity)
+        const vt_x = vel.x - vn_x;
+        const vt_y = vel.y - vn_y;
+
+        // Apply bounce to normal, friction to tangent
+        // We flip the normal component (-restitution) to bounce OFF the wall
+        vel.x = (vt_x * friction) - (vn_x * restitution);
+        vel.y = (vt_y * friction) - (vn_y * restitution);
     }
 }
 
@@ -332,29 +444,39 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
         const g_colliders = ecs.field(&q_it, Collider, 2).?;
 
         for (0..q_it.count()) |i| {
+            // We assume Ground is always AABB for now (as per setup)
             const gp = g_positions[i];
-            const gc = g_colliders[i];
-            const ground_aabb = getWorldAABB(gp, gc);
+            const ground_shape = g_colliders[i].box;
+
+            // Construct World AABB for ground
+            const ground_aabb = c2.AABB{
+                .min = .{ .x = ground_shape.min.x + gp.x, .y = ground_shape.min.y + gp.y },
+                .max = .{ .x = ground_shape.max.x + gp.x, .y = ground_shape.max.y + gp.y },
+            };
 
             for (positions, velocities, colliders) |*pos, *vel, col| {
-                const entity_aabb = getWorldAABB(pos.*, col);
-
-                if (!c2.aabbToAABB(entity_aabb, ground_aabb)) continue;
-
                 var m: c2.Manifold = undefined;
-                c2.aabbToAABBManifold(entity_aabb, ground_aabb, &m);
+                m.count = 0;
+
+                // Dispatch based on Entity Shape
+                switch (col) {
+                    .circle => |c| {
+                        // Circle vs AABB (Best for Bouncing Bullets)
+                        const world_circle = c2.Circle{ .p = .{ .x = pos.x + c.p.x, .y = pos.y + c.p.y }, .r = c.r };
+                        c2.circleToAABBManifold(world_circle, ground_aabb, &m);
+                    },
+                    .box => |b| {
+                        // AABB vs AABB (Fallback for boxes)
+                        const world_aabb = c2.AABB{
+                            .min = .{ .x = b.min.x + pos.x, .y = b.min.y + pos.y },
+                            .max = .{ .x = b.max.x + pos.x, .y = b.max.y + pos.y },
+                        };
+                        c2.aabbToAABBManifold(world_aabb, ground_aabb, &m);
+                    },
+                }
 
                 if (m.count > 0) {
-                    const depth = m.depths[0];
-                    const n = m.n;
-
-                    // Push out of collision
-                    pos.x -= n.x * depth;
-                    pos.y -= n.y * depth;
-
-                    // Stop velocity in the direction of the normal (slide)
-                    if (n.x != 0) vel.x = 0;
-                    if (n.y != 0) vel.y = 0;
+                    resolveBody(pos, vel, m.n, m.depths[0]);
                 }
             }
         }

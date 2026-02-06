@@ -608,7 +608,7 @@ pub fn gjk(A: *const Shape, ax_ptr: ?*const Transform, B: *const Shape, bx_ptr: 
         d0 = d1;
 
         const d = simplexD(&s);
-        if (d.dot(d) < std.math.epsilon(f32) * std.math.epsilon(f32)) break;
+        if (d.dot(d) < std.math.floatEps(f32) * std.math.floatEps(f32)) break;
 
         const iA = support(pA.verts[0..@intCast(pA.count)], ax.r.mulVecT(d.neg()));
         const sA = ax.mulVec(pA.verts[@intCast(iA)]);
@@ -647,7 +647,7 @@ pub fn gjk(A: *const Shape, ax_ptr: ?*const Transform, B: *const Shape, bx_ptr: 
     } else if (use_radius) {
         const rA = pA.radius;
         const rB = pB.radius;
-        if (dist > rA + rB and dist > std.math.epsilon(f32)) {
+        if (dist > rA + rB and dist > std.math.floatEps(f32)) {
             dist -= rA + rB;
             const n = b.sub(a).norm();
             a = a.add(n.mul(rA));
@@ -727,7 +727,7 @@ pub fn rayToAABB(A: Ray, B: AABB, out: *Raycast) bool {
     var normal = Vec2.init(0, 0);
 
     // X
-    if (absD.x < std.math.epsilon(f32)) {
+    if (absD.x < std.math.floatEps(f32)) {
         if (p.x < B.min.x or p.x > B.max.x) return false;
     } else {
         const ood = 1.0 / d.x;
@@ -749,7 +749,7 @@ pub fn rayToAABB(A: Ray, B: AABB, out: *Raycast) bool {
     }
 
     // Y
-    if (absD.y < std.math.epsilon(f32)) {
+    if (absD.y < std.math.floatEps(f32)) {
         if (p.y < B.min.y or p.y > B.max.y) return false;
     } else {
         const ood = 1.0 / d.y;
