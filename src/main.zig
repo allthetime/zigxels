@@ -29,8 +29,8 @@ const BulletsGroup = components.BulletsGroup;
 const PlayerContainer = components.PlayerContainer;
 const PhysicsState = components.PhysicsState;
 
-const HEIGHT: usize = 768;
-const WIDTH: usize = 1024;
+const HEIGHT: usize = 1440 / 2;
+const WIDTH: usize = 2560 / 2;
 
 pub fn main() !void {
     var engine = try engine_mod.Engine.init(WIDTH, HEIGHT);

@@ -3,7 +3,7 @@ const std = @import("std");
 const sdl = @import("SDL2"); // Name from build.zig.zon
 
 pub fn build(b: *std.Build) void {
-    const target = b.graph.host;
+    const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const root_module = b.createModule(.{
@@ -22,7 +22,8 @@ pub fn build(b: *std.Build) void {
     const sdk = sdl.init(b, .{
         .dep_name = "SDL2",
     });
-    sdk.link(exe, .dynamic, sdl.Library.SDL2);
+    // sdk.link(exe, .dynamic, sdl.Library.SDL2);
+    sdk.link(exe, .static, sdl.Library.SDL2);
     root_module.addImport("sdl2", sdk.getWrapperModule());
 
     // zflecs
