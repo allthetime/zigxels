@@ -661,12 +661,12 @@ fn make_explosion(world: *ecs.world_t, x: f32, y: f32, dir_x: f32, dir_y: f32, o
         //
         // ecs.add(world, e, Ground);
         _ = ecs.set(world, e, Velocity, .{ .x = p_vx * speed, .y = p_vy * speed });
-        // _ = ecs.set(world, e, Collider, .{
-        //     .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 1 },
-        // });
         _ = ecs.set(world, e, Collider, .{
-            .box = .{ .min = .{ .x = -2, .y = -2 }, .max = .{ .x = 2, .y = 2 } },
+            .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 1 },
         });
+        // _ = ecs.set(world, e, Collider, .{
+        //     .box = .{ .min = .{ .x = -2, .y = -2 }, .max = .{ .x = 2, .y = 2 } },
+        // });
         _ = ecs.set(world, e, components.ExplosionParticle, .{
             .lifetime = 0.3 + rnd.float(f32) * 0.4,
             .color = options.color,

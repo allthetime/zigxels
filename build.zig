@@ -17,6 +17,9 @@ pub fn build(b: *std.Build) void {
         .root_module = root_module,
     });
 
+    // allow for release compilation
+    b.installArtifact(exe);
+
     // SDL2
 
     const sdk = sdl.init(b, .{
