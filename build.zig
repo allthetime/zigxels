@@ -32,29 +32,10 @@ pub fn build(b: *std.Build) void {
     exe.linkLibrary(zflecs.artifact("flecs"));
 
     // tinyc2
-    // header only
-
-    exe.addIncludePath(b.path("./lib/"));
-    exe.addCSourceFile(.{
-        .file = b.path("lib/cute_c2/cute_c2.c"),
-        .flags = &.{},
-    });
-    exe.linkLibC(); // Required for math functions (cosf, sqrtf, etc.)
-    b.installArtifact(exe);
-
-    // tinyc2
-    // wrapper lib
-
-    const cute_c2_module = b.createModule(.{
-        .root_source_file = b.path("lib/cute_c2/cute_c2.zig"),
-    });
-    root_module.addImport("cute_c2", cute_c2_module);
-
-    // tinyc2
     // gemini zig rewrite
 
     const antigravity_c2 = b.createModule(.{
-        .root_source_file = b.path("lib/cute_c2/pure_zig_c2.zig"),
+        .root_source_file = b.path("lib/cute_c2/zoot_c2.zig"),
     });
     root_module.addImport("zig_c2", antigravity_c2);
 

@@ -15,10 +15,13 @@ pub const Collider = union(enum) {
 
 pub const Target = struct { x: f32, y: f32 };
 
+pub const RecoilImpulse = struct { x: f32 = 0.0 };
+
 pub const Gun = struct {
     cooldown: f32 = 0.0,
     fire_rate: f32 = 0.1,
     bullet_speed: f32 = 1000.0,
+    recoil: f32 = 100.0,
 };
 
 pub const ExplosionParticle = struct {

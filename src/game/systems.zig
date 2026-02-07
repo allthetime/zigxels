@@ -164,32 +164,72 @@ pub fn render_system(it: *ecs.iter_t, positions: []Position, colliders: []Collid
 
 /// KINEMATIC PLAYER CONTROLLER
 /// Handles Movement, Gravity, and Collision sequentially to ensure tight controls without glitches.
-pub fn player_controller_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, colliders: []Collider) void {
+pub fn player_controller_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, colliders: []Collider, recoils: []components.RecoilImpulse) void {
     const world = it.world;
     const input = ecs.singleton_get(world, input_mod.InputState) orelse return;
     const dt = it.delta_time;
 
-    for (positions, velocities, colliders) |*pos, *vel, col| {
+    for (positions, velocities, colliders, recoils) |*pos, *vel, col, *recoil| {
+        // // 1. Horizontal Input
+        // var dx: f32 = 0;
+        // if (input.pressed_directions.left) dx -= 1;
+        // if (input.pressed_directions.right) dx += 1;
+        // // Decay Recoil
+        // const decay: f32 = 5.0;
+        // recoil.x = recoil.x * std.math.exp(-decay * dt);
+
+        // // Combine: Instant Input + Decaying Recoil
+        // vel.x = (dx * PLAYER_SPEED) + recoil.x;
+
+        // // 2. Vertical Input (Gravity + Jump)
+        // vel.y += GRAVITY * dt;
+        // if (input.pressed_directions.up) {
+        //     // Jump only if on ground (simple check: if we are colliding with ground below)
+        //     //
+        //     // This is a simple way to check if we're on the ground: we move the player down slightly and see if it collides. If it does, we can jump.
+        //     // Note: This is a common technique in platformers to allow jumping only when the player is "grounded".
+        //     // We only check for collision below the player to allow jumping even if we're touching a wall on the side.
+        //     // We can adjust the offset (e.g., 1 pixel) to be more or less strict about what counts as "grounded".
+        //     const test_pos = Position{ .x = pos.x, .y = pos.y + 1 };
+        //     const test_aabb = getWorldAABB(test_pos, col);
+        //     if (checkCollision(world, test_aabb)) {
+        //         vel.y = -PLAYER_SPEED * 1.5;
+        //     }
+        // } else if (input.pressed_directions.down) {
+        //     vel.y = PLAYER_SPEED;
+        // }
+
+        // Ground Check
+        const test_pos = Position{ .x = pos.x, .y = pos.y + 1 };
+        const test_aabb = getWorldAABB(test_pos, col);
+        const is_grounded = checkCollision(world, test_aabb);
+
         // 1. Horizontal Input
         var dx: f32 = 0;
         if (input.pressed_directions.left) dx -= 1;
         if (input.pressed_directions.right) dx += 1;
-        vel.x = dx * PLAYER_SPEED;
+
+        if (is_grounded) {
+            // Ground Logic: Snappy Control + Temporary Recoil
+            const decay: f32 = 5.0;
+            recoil.x = recoil.x * std.math.exp(-decay * dt);
+            vel.x = (dx * PLAYER_SPEED) + recoil.x;
+        } else {
+            // Air Logic: Momentum Based
+            // 1. Absorb pending recoil into momentum
+            vel.x += recoil.x;
+            recoil.x = 0;
+
+            // 2. Weak Air Control (Drift towards target)
+            const target_vx = dx * PLAYER_SPEED;
+            const air_control: f32 = 2.0; // Low value = slippery/heavy air feel
+            vel.x = target_vx + (vel.x - target_vx) * std.math.exp(-air_control * dt);
+        }
 
         // 2. Vertical Input (Gravity + Jump)
         vel.y += GRAVITY * dt;
-        if (input.pressed_directions.up) {
-            // Jump only if on ground (simple check: if we are colliding with ground below)
-            //
-            // This is a simple way to check if we're on the ground: we move the player down slightly and see if it collides. If it does, we can jump.
-            // Note: This is a common technique in platformers to allow jumping only when the player is "grounded".
-            // We only check for collision below the player to allow jumping even if we're touching a wall on the side.
-            // We can adjust the offset (e.g., 1 pixel) to be more or less strict about what counts as "grounded".
-            const test_pos = Position{ .x = pos.x, .y = pos.y + 1 };
-            const test_aabb = getWorldAABB(test_pos, col);
-            if (checkCollision(world, test_aabb)) {
-                vel.y = -PLAYER_SPEED * 1.5;
-            }
+        if (input.pressed_directions.up and is_grounded) {
+            vel.y = -PLAYER_SPEED * 1.5;
         } else if (input.pressed_directions.down) {
             vel.y = PLAYER_SPEED;
         }
@@ -270,77 +310,29 @@ pub fn shoot_system(it: *ecs.iter_t, guns: []components.Gun, positions: []Positi
         const dist = @sqrt(dx * dx + dy * dy);
 
         if (dist > 0) {
+            const dir_x = dx / dist;
+            const dir_y = dy / dist;
+
             _ = ecs.set(world, bullet, Velocity, .{
-                .x = (dx / dist) * BULLET_SPEED,
-                .y = (dy / dist) * BULLET_SPEED,
+                .x = dir_x * BULLET_SPEED,
+                .y = dir_y * BULLET_SPEED,
             });
+
+            if (ecs.singleton_get(world, components.PlayerContainer)) |pc| {
+                if (ecs.get_mut(world, pc.entity, Velocity)) |vel| {
+                    // Y affects momentum (fighting gravity)
+                    vel.y -= dir_y * gun.recoil;
+                }
+                if (ecs.get_mut(world, pc.entity, components.RecoilImpulse)) |impulse| {
+                    // X affects temporary impulse
+                    impulse.x -= dir_x * gun.recoil;
+                }
+            }
         } else {
             _ = ecs.set(world, bullet, Velocity, .{ .x = 0, .y = 0 });
         }
     }
 }
-
-// pub fn gun_aim_system(it: *ecs.iter_t, gun_positions: []Position) void {
-//     const world = it.world;
-//     const input = ecs.singleton_get(world, input_mod.InputState) orelse return;
-
-//     // Find the player's Position (we assume exactly one player)
-//     // // this setup will be good for MULTIPLE PLAYERS
-//     // var desc = ecs.query_desc_t{};
-//     // desc.terms[0] = .{ .id = ecs.id(Player) };
-//     // desc.terms[1] = .{ .id = ecs.id(Position) };
-//     // const query = ecs.query_init(world, &desc) catch return;
-//     // defer ecs.query_fini(query);
-
-//     // var player_pos: Position = .{ .x = 0.0, .y = 0.0 };
-//     // var found_player = false;
-
-//     // var q_it = ecs.query_iter(world, query);
-//     // while (ecs.query_next(&q_it)) {
-//     //     const p_positions = ecs.field(&q_it, Position, 1).?;
-//     //     // there should be only one player, read the first
-//     //     if (q_it.count() > 0) {
-//     //         player_pos = p_positions[0];
-//     //         found_player = true;
-//     //     }
-//     //     // ecs.iter_fini(&q_it);
-//     // }
-//     // if (!found_player) return;
-
-//     // 1. Get the player entity ID from the singleton
-//     const player_container = ecs.singleton_get(world, components.PlayerContainer) orelse return;
-//     const player_entity = player_container.entity;
-
-//     // 2. Get the player's position directly
-//     const player_pos = ecs.get(world, player_entity, Position) orelse return;
-
-//     const mouse_x = @as(f32, @floatFromInt(input.mouse_x));
-//     const mouse_y = @as(f32, @floatFromInt(input.mouse_y));
-
-//     const GUN_RADIUS: f32 = 40.0;
-
-//     for (gun_positions) |*gpos| {
-//         const dx: f32 = mouse_x - player_pos.x;
-//         const dy: f32 = mouse_y - player_pos.y;
-//         const dist: f32 = @sqrt(dx * dx + dy * dy);
-
-//         if (dist == 0.0) {
-//             // Mouse exactly at player center -> gun centered on player
-//             gpos.x = player_pos.x;
-//             gpos.y = player_pos.y;
-//         } else if (dist <= GUN_RADIUS) {
-//             // Mouse within radius -> gun snaps to mouse world position
-//             gpos.x = mouse_x;
-//             gpos.y = mouse_y;
-//         } else {
-//             // Outside radius -> clamp to circle around player
-//             const nx = dx / dist;
-//             const ny = dy / dist;
-//             gpos.x = player_pos.x + nx * GUN_RADIUS;
-//             gpos.y = player_pos.y + ny * GUN_RADIUS;
-//         }
-//     }
-// }
 
 pub fn gun_aim_system(it: *ecs.iter_t, gun_positions: []Position) void {
     const world = it.world;
