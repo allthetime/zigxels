@@ -30,6 +30,7 @@ pub const Engine = struct {
             .events = true,
             .video = true,
             .timer = true,
+            .game_controller = true,
         });
         _ = try SDL.showCursor(false);
 

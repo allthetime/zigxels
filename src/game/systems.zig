@@ -632,3 +632,30 @@ pub fn explosion_system(it: *ecs.iter_t, positions: []Position, velocities: []Ve
 fn setAlpha(color: u32, alpha: u8) u32 {
     return (color & 0xFFFFFF00) | (@as(u32, alpha) << 24);
 }
+
+pub fn right_controller_stick_set_mouse_xy_system(it: *ecs.iter_t) void {
+    // _ = it;
+    const world = it.world;
+    const input = ecs.singleton_get_mut(world, input_mod.InputState) orelse return;
+    const engine = Engine.getEngine(world);
+
+    if (input.right_stick_x != 0.0 or input.right_stick_y != 0.0) {
+        if (ecs.singleton_get(world, components.PlayerContainer)) |pc| {
+            if (ecs.get(world, pc.entity, Position)) |pos| {
+                const dx = input.right_stick_x;
+                const dy = input.right_stick_y;
+                // Calculate intersection with screen bounds (0,0) -> (WIDTH, HEIGHT)
+                // Ray: pos + t * (dx, dy)
+                // We want smallest positive t where ray hits bounds.
+                const tx = if (dx > 0) (@as(f32, @floatFromInt(engine.width)) - pos.x) / dx else if (dx < 0) -pos.x / dx else std.math.floatMax(f32);
+
+                const ty = if (dy > 0) (@as(f32, @floatFromInt(engine.height)) - pos.y) / dy else if (dy < 0) -pos.y / dy else std.math.floatMax(f32);
+                const t = @min(tx, ty);
+
+                input.mouse_x = @intFromFloat(pos.x + dx * t);
+                input.mouse_y = @intFromFloat(pos.y + dy * t);
+            }
+        }
+    }
+    _ = ecs.singleton_set(world, input_mod.InputState, input.*);
+}

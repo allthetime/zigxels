@@ -53,15 +53,39 @@ pub fn main() !void {
 
     while (!input.quit_requested) {
         const dt = calculateDeltaTime(&time_ticks);
-
         engine.beginFrame();
 
         input.update();
+
+        // if (input.right_stick_x != 0.0 or input.right_stick_y != 0.0) {
+        //     if (ecs.singleton_get(world, PlayerContainer)) |pc| {
+        //         if (ecs.get(world, pc.entity, Position)) |pos| {
+        //             const dx = input.right_stick_x;
+        //             const dy = input.right_stick_y;
+        //             // Calculate intersection with screen bounds (0,0) -> (WIDTH, HEIGHT)
+        //             // Ray: pos + t * (dx, dy)
+        //             // We want smallest positive t where ray hits bounds.
+        //             const tx = if (dx > 0) (@as(f32, @floatFromInt(WIDTH)) - pos.x) / dx else if (dx < 0) -pos.x / dx else std.math.floatMax(f32);
+        //             const ty = if (dy > 0) (@as(f32, @floatFromInt(HEIGHT)) - pos.y) / dy else if (dy < 0) -pos.y / dy else std.math.floatMax(f32);
+        //             const t = @min(tx, ty);
+        //             input.mouse_x = @intFromFloat(pos.x + dx * t);
+        //             input.mouse_y = @intFromFloat(pos.y + dy * t);
+        //         }
+        //     }
+        // }
+
+        _ = ecs.singleton_set(world, input_mod.InputState, input);
+
         _ = ecs.singleton_set(world, input_mod.InputState, input);
 
         engine.restoreBackground();
         _ = ecs.progress(world, dt);
         try engine.updateTexture();
+
+        // incase systems have altered input state
+        if (ecs.singleton_get(world, input_mod.InputState)) |s| {
+            input = s.*;
+        }
 
         const cursorSize = updateCursorSize(input.is_pressing, &cursor_size);
         try renderMouseCursor(engine.renderer, &input, cursorSize);
@@ -162,6 +186,9 @@ fn register_components(world: *ecs.world_t) void {
 
 fn register_systems(world: *ecs.world_t) void {
     // 1. Player Controller (Handling Input + Movement + Collision)
+
+    _ = ecs.ADD_SYSTEM(world, "input_capture", ecs.OnUpdate, game.right_controller_stick_set_mouse_xy_system);
+
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_controller", ecs.OnUpdate, game.player_controller_system, &.{
         .{ .id = ecs.id(Player) },
         .{ .id = ecs.id(Position) },
