@@ -1,6 +1,7 @@
 const SDL = @import("sdl2");
 const ecs = @import("zflecs");
 const c2 = @import("zig_c2");
+const std = @import("std");
 
 pub const Position = struct { x: f32, y: f32 };
 pub const Velocity = struct { x: f32, y: f32 };
@@ -14,11 +15,17 @@ pub const Collider = union(enum) {
 
 pub const Target = struct { x: f32, y: f32 };
 
+pub const Gun = struct {
+    cooldown: f32 = 0.0,
+    fire_rate: f32 = 0.1,
+    bullet_speed: f32 = 1000.0,
+};
+
 // tag!
 pub const Bullet = struct {};
 pub const Player = struct {};
-pub const Gun = struct {};
 pub const Ground = struct {};
+pub const Destroyable = struct {};
 pub const PhysicsBody = struct {};
 
 // singletons for easy access

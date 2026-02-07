@@ -36,7 +36,7 @@ fn f32_to_i32(value: f32) i32 {
 }
 
 /// Helper to transform local collider to world space AABB
-fn getWorldAABB(pos: Position, collider: Collider) c2.AABB {
+pub fn getWorldAABB(pos: Position, collider: Collider) c2.AABB {
     switch (collider) {
         .box => |b| {
             // Add world position to local bounds
@@ -116,22 +116,25 @@ pub fn bullet_cleanup_system(it: *ecs.iter_t, positions: []Position) void {
 
 pub fn seek_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, targets: []Target) void {
     _ = it;
-    for (positions, velocities, targets) |pos, *vel, target| {
-        const p = c2.Vec2{ .x = pos.x, .y = pos.y };
-        const t = c2.Vec2{ .x = target.x, .y = target.y };
-        const diff = t.sub(p);
-        const dist = diff.len();
+    _ = positions;
+    _ = velocities;
+    _ = targets;
+    // for (positions, velocities, targets) |pos, *vel, target| {
+    //     const p = c2.Vec2{ .x = pos.x, .y = pos.y };
+    //     const t = c2.Vec2{ .x = target.x, .y = target.y };
+    //     const diff = t.sub(p);
+    //     const dist = diff.len();
 
-        // If we are further than 2 pixels away, move towards target
-        if (dist > 2.0) {
-            const v = diff.norm().mul(BULLET_SPEED);
-            vel.x = v.x;
-            vel.y = v.y;
-        } else {
-            vel.x = 0;
-            vel.y = 0;
-        }
-    }
+    //     // If we are further than 2 pixels away, move towards target
+    //     if (dist > 2.0) {
+    //         const v = diff.norm().mul(BULLET_SPEED);
+    //         vel.x = v.x;
+    //         vel.y = v.y;
+    //     } else {
+    //         vel.x = 0;
+    //         vel.y = 0;
+    //     }
+    // }
 }
 
 pub fn render_system(it: *ecs.iter_t, positions: []Position, colliders: []Collider, renderables: []Renderable) void {
@@ -211,7 +214,7 @@ pub fn player_controller_system(it: *ecs.iter_t, positions: []Position, velociti
     }
 }
 
-pub fn shoot_system(it: *ecs.iter_t, positions: []Position) void {
+pub fn shoot_system(it: *ecs.iter_t, guns: []components.Gun, positions: []Position) void {
     const world = it.world;
     const input = ecs.singleton_get(world, input_mod.InputState) orelse return;
     const bullets_group = ecs.singleton_get(world, components.BulletsGroup);
@@ -219,8 +222,18 @@ pub fn shoot_system(it: *ecs.iter_t, positions: []Position) void {
     // If mouse not pressed, do nothing
     if (!input.is_pressing) return;
 
-    for (positions) |pos| {
+    for (positions, guns) |pos, *gun| {
         // Create Bullet Entity
+
+        if (gun.cooldown > 0) {
+            // Still cooling down, skip shooting
+            gun.cooldown -= it.delta_time;
+            continue;
+        } else {
+            // Reset cooldown
+            gun.cooldown = gun.fire_rate;
+        }
+
         const bullet = ecs.new_id(world);
         ecs.add(world, bullet, Bullet); // TAG
         ecs.add(world, bullet, PhysicsBody); // NEW: Bullet is physics controlled
@@ -438,6 +451,11 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
     const world = it.world;
     const phys = ecs.singleton_get(world, components.PhysicsState) orelse return;
 
+    var doomed_ground: [64]ecs.entity_t = undefined;
+    var doomed_ground_count: usize = 0;
+    var doomed_bullets: [64]ecs.entity_t = undefined;
+    var doomed_bullet_count: usize = 0;
+
     var q_it = ecs.query_iter(world, phys.ground_query);
     while (ecs.query_next(&q_it)) {
         const g_positions = ecs.field(&q_it, Position, 1).?;
@@ -454,7 +472,7 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
                 .max = .{ .x = ground_shape.max.x + gp.x, .y = ground_shape.max.y + gp.y },
             };
 
-            for (positions, velocities, colliders) |*pos, *vel, col| {
+            for (positions, velocities, colliders, 0..) |*pos, *vel, col, entity_idx| {
                 var m: c2.Manifold = undefined;
                 m.count = 0;
 
@@ -476,10 +494,71 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
                 }
 
                 if (m.count > 0) {
-                    resolveBody(pos, vel, m.n, m.depths[0]);
+                    const entity = it.entities()[entity_idx];
+                    const is_bullet = ecs.has_id(world, entity, ecs.id(Bullet));
+
+                    if (is_bullet) {
+                        // Destroy ground tile
+                        const ground_entity = q_it.entities()[i];
+
+                        // check if ground_entity has Destroyable tag
+                        // if it doesn't, skip destruction (e.g., indestructible walls)
+                        // This allows us to have a mix of destructible and indestructible terrain
+                        // In a real game, we might want to add a "Health" component to ground pieces for multiple hits, but for now it's just Destroyable or not.
+                        // Note: We check for the Destroyable tag on the ground entity before queuing it for deletion. This way, we can have some ground pieces that are indestructible (e.g., bedrock) and won't be affected by bullets.
+                        // If the ground piece is not Destroyable, we simply skip the deletion logic and let the bullet bounce off as normal.
+                        // This also means that indestructible ground will still cause bullets to bounce, while destructible ground will be removed and allow bullets to pass through on subsequent shots.
+                        // This adds an extra layer of strategy, as players can choose to shoot through destructible terrain to create new paths or take cover behind indestructible walls.
+                        // In the future, we could expand this system to allow for different types of destructible terrain (e.g., wood that takes 2 hits, stone that takes 5 hits) by adding a "Health" component to ground entities and reducing it on each hit until it reaches zero, at which point we delete the entity.
+                        if (!ecs.has_id(world, ground_entity, ecs.id(components.Destroyable))) {
+                            // Not destroyable, just bounce bullet as normal
+                            resolveBody(pos, vel, m.n, m.depths[0]);
+                            continue;
+                        }
+
+                        // Queue Ground Deletion (Unique)
+                        var already_doomed = false;
+                        for (0..doomed_ground_count) |k| {
+                            if (doomed_ground[k] == ground_entity) {
+                                already_doomed = true;
+                                break;
+                            }
+                        }
+
+                        if (!already_doomed and doomed_ground_count < doomed_ground.len) {
+                            // Restore visual immediately (safe because we just write to pixels)
+                            const engine = Engine.getEngine(world);
+                            const gw = ground_shape.max.x - ground_shape.min.x;
+                            const gh = ground_shape.max.y - ground_shape.min.y;
+                            const gx = f32_to_i32(ground_aabb.min.x);
+                            const gy = f32_to_i32(ground_aabb.min.y);
+                            pixel_mod.restoreRect(engine, gx, gy, @as(usize, @intFromFloat(gw)), @as(usize, @intFromFloat(gh)));
+
+                            doomed_ground[doomed_ground_count] = ground_entity;
+                            doomed_ground_count += 1;
+                        }
+
+                        // Queue Bullet Deletion
+                        if (doomed_bullet_count < doomed_bullets.len) {
+                            doomed_bullets[doomed_bullet_count] = entity;
+                            doomed_bullet_count += 1;
+                        }
+
+                        // slow bullet on hit (optional, can be removed for instant destruction)
+                        vel.x *= 0.5;
+                    } else {
+                        resolveBody(pos, vel, m.n, m.depths[0]);
+                    }
                 }
             }
         }
+    }
+
+    for (0..doomed_ground_count) |i| {
+        ecs.delete(world, doomed_ground[i]);
+    }
+    for (0..doomed_bullet_count) |i| {
+        ecs.delete(world, doomed_bullets[i]);
     }
 }
 

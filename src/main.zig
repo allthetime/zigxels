@@ -38,6 +38,7 @@ const Bullet = components.Bullet;
 const Player = components.Player;
 const Ground = components.Ground;
 const Gun = components.Gun;
+const Destroyable = components.Destroyable;
 
 // groups
 const BulletsGroup = components.BulletsGroup;
@@ -99,8 +100,10 @@ pub fn main() !void {
         std.debug.print("Z2 Collision detected----!\n", .{});
     }
 
-    // Generate gradient ONCE and store it in background_buffer (using SIMD-optimized version)
-    pixels_mod.makeGradientSIMD(engine.background_buffer, engine.width, engine.height);
+    // Generate gradient ONCE and store it in sky_buffer
+    pixels_mod.makeGradientSIMD(engine.sky_buffer, engine.width, engine.height);
+    // Copy to background buffer initially
+    @memcpy(engine.background_buffer, engine.sky_buffer);
     // Copy to working buffer initially
     @memcpy(engine.pixel_buffer, engine.background_buffer);
 
@@ -108,7 +111,7 @@ pub fn main() !void {
     defer _ = ecs.fini(world);
 
     ecs.set_ctx(world, &engine, dummy_free);
-    setup_game(world, &engine);
+    try setup_game(world, &engine);
 
     var last_time = SDL.getTicks64();
     var cursor_size: f32 = 20.0;
@@ -162,6 +165,12 @@ pub fn main() !void {
                 _ = ecs.set(world, player_entity, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 2.0 });
                 _ = ecs.set(world, player_entity, Velocity, .{ .x = 0.0, .y = 0.0 });
             }
+
+            // Reset Level
+            ecs.delete_with(world, ecs.id(Ground));
+            @memcpy(engine.background_buffer, engine.sky_buffer);
+            spawn_level(world, &engine);
+
             input.reset = false;
         }
 
@@ -203,10 +212,10 @@ fn renderMouseCursor(renderer: SDL.Renderer, input: *input_mod.InputState, size:
     });
 }
 
-pub fn setup_game(world: *ecs.world_t, engine: *engine_mod.Engine) void {
+pub fn setup_game(world: *ecs.world_t, engine: *engine_mod.Engine) !void {
     register_components(world);
     register_systems(world);
-    spawn_initial_entities(world, engine);
+    try spawn_initial_entities(world, engine);
 }
 
 fn register_components(world: *ecs.world_t) void {
@@ -219,13 +228,15 @@ fn register_components(world: *ecs.world_t) void {
     ecs.COMPONENT(world, Collider);
     ecs.COMPONENT(world, PlayerContainer);
     ecs.COMPONENT(world, PhysicsState);
+    ecs.COMPONENT(world, Gun);
 
     // TAGS (size 0)
     ecs.TAG(world, Bullet);
     ecs.TAG(world, Player);
     ecs.TAG(world, Ground);
     ecs.TAG(world, PhysicsBody);
-    ecs.TAG(world, Gun);
+    // ecs.TAG(world, Gun);
+    ecs.TAG(world, Destroyable);
 }
 
 fn register_systems(world: *ecs.world_t) void {
@@ -281,7 +292,7 @@ fn register_systems(world: *ecs.world_t) void {
     _ = ecs.ADD_SYSTEM(world, "render", ecs.OnStore, game.render_system);
 }
 
-fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) void {
+fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) !void {
     const player = ecs.new_entity(world, "Player");
     _ = ecs.set(world, player, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 2.0 });
     _ = ecs.set(world, player, Velocity, .{ .x = 0.0, .y = 0.0 });
@@ -300,27 +311,13 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) void 
     _ = ecs.set(world, gun, Collider, .{
         .box = .{ .min = .{ .x = -4, .y = -4 }, .max = .{ .x = 4, .y = 4 } },
     });
-    ecs.add(world, gun, Gun);
+    _ = ecs.set(world, gun, Gun, .{
+        .fire_rate = 0.05,
+    });
     ecs.add(world, gun, PhysicsBody);
     _ = ecs.add_pair(world, gun, ecs.ChildOf, player);
 
-    const ground1 = ecs.new_id(world);
-    ecs.add(world, ground1, Ground);
-    _ = ecs.set(world, ground1, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 1.5 });
-    _ = ecs.set(world, ground1, Collider, .{ .box = .{ .min = .{ .x = -150, .y = -25 }, .max = .{ .x = 150, .y = 25 } } });
-    _ = ecs.set(world, ground1, Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
-
-    const ground2 = ecs.new_id(world);
-    ecs.add(world, ground2, Ground);
-    _ = ecs.set(world, ground2, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0 - 200, .y = @as(f32, @floatFromInt(engine.height)) / 1.5 - 100 });
-    _ = ecs.set(world, ground2, Collider, .{ .box = .{ .min = .{ .x = -100, .y = -10 }, .max = .{ .x = 100, .y = 10 } } });
-    _ = ecs.set(world, ground2, Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
-
-    const ground3 = ecs.new_id(world);
-    ecs.add(world, ground3, Ground);
-    _ = ecs.set(world, ground3, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0 + 100, .y = @as(f32, @floatFromInt(engine.height)) / 1.5 - 60 });
-    _ = ecs.set(world, ground3, Collider, .{ .box = .{ .min = .{ .x = -50, .y = -10 }, .max = .{ .x = 50, .y = 10 } } });
-    _ = ecs.set(world, ground3, Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
+    spawn_level(world, engine);
 
     // Cache the Ground Query for Physics Systems
     var desc = ecs.query_desc_t{};
@@ -329,4 +326,49 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) void 
     desc.terms[2] = .{ .id = ecs.id(Collider), .inout = .In };
     const ground_q = ecs.query_init(world, &desc) catch unreachable;
     _ = ecs.singleton_set(world, components.PhysicsState, .{ .ground_query = ground_q });
+}
+
+fn spawn_level(world: *ecs.world_t, engine: *engine_mod.Engine) void {
+    const cx1 = @as(f32, @floatFromInt(engine.width)) / 2.0;
+    const cy1 = @as(f32, @floatFromInt(engine.height)) / 1.5;
+    spawnGroundGrid(world, cx1 - 150, cy1 - 25, 300, 50);
+
+    const cx2 = @as(f32, @floatFromInt(engine.width)) / 2.0 - 200;
+    const cy2 = @as(f32, @floatFromInt(engine.height)) / 1.5 - 100;
+    spawnGroundGrid(world, cx2 - 100, cy2 - 10, 200, 20);
+
+    const cx3 = @as(f32, @floatFromInt(engine.width)) / 2.0 + 100;
+    const cy3 = @as(f32, @floatFromInt(engine.height)) / 1.5 - 60;
+    spawnGroundGrid(world, cx3 - 50, cy3 - 10, 100, 20);
+
+    const floor = ecs.new_entity(world, "Floor");
+    _ = ecs.set(world, floor, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) - 50.0 });
+    _ = ecs.set(world, floor, Collider, .{ .box = .{ .min = .{ .x = -@as(f32, @floatFromInt(engine.width)) / 2.0, .y = -50.0 }, .max = .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = 50 } } });
+    _ = ecs.set(world, floor, Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
+    ecs.add(world, floor, Ground);
+}
+
+fn spawnGroundGrid(world: *ecs.world_t, start_x: f32, start_y: f32, width: f32, height: f32) void {
+    const tile_size: f32 = 5.0;
+    const cols = @as(usize, @intFromFloat(width / tile_size));
+    const rows = @as(usize, @intFromFloat(height / tile_size));
+
+    var r: usize = 0;
+    while (r < rows) : (r += 1) {
+        var c_: usize = 0;
+        while (c_ < cols) : (c_ += 1) {
+            const e = ecs.new_id(world);
+            ecs.add(world, e, Ground);
+
+            const tx = start_x + (@as(f32, @floatFromInt(c_)) * tile_size) + (tile_size / 2.0);
+            const ty = start_y + (@as(f32, @floatFromInt(r)) * tile_size) + (tile_size / 2.0);
+
+            _ = ecs.set(world, e, Position, .{ .x = tx, .y = ty });
+            // Small collider for each tile
+            const half = tile_size / 2.0;
+            _ = ecs.set(world, e, Collider, .{ .box = .{ .min = .{ .x = -half, .y = -half }, .max = .{ .x = half, .y = half } } });
+            _ = ecs.set(world, e, Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
+            _ = ecs.add(world, e, Destroyable);
+        }
+    }
 }

@@ -11,6 +11,7 @@ pub const Engine = struct {
     // Pixel layer
     pixel_buffer: []u32,
     background_buffer: []u32,
+    sky_buffer: []u32,
     texture: SDL.Texture,
     width: usize,
     height: usize,
@@ -62,6 +63,7 @@ pub const Engine = struct {
 
         const pixels = try allocator.alloc(u32, width * height);
         const background = try allocator.alloc(u32, width * height);
+        const sky = try allocator.alloc(u32, width * height);
 
         return Engine{
             .gpa = gpa,
@@ -70,6 +72,7 @@ pub const Engine = struct {
             .renderer = renderer,
             .pixel_buffer = pixels,
             .background_buffer = background,
+            .sky_buffer = sky,
             .texture = texture,
             .width = width,
             .height = height,
@@ -102,6 +105,7 @@ pub const Engine = struct {
         const allocator = self.gpa.allocator();
         allocator.free(self.pixel_buffer);
         allocator.free(self.background_buffer);
+        allocator.free(self.sky_buffer);
 
         self.texture.destroy();
         self.renderer.destroy();
