@@ -42,6 +42,7 @@ pub const Engine = struct {
             height,
             .{
                 .vis = .shown,
+                .resizable = true,
             },
         );
 
@@ -53,6 +54,7 @@ pub const Engine = struct {
                 .present_vsync = true,
             },
         );
+        try renderer.setLogicalSize(@intCast(width), @intCast(height));
 
         const texture = try SDL.createTexture(
             renderer,

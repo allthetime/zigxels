@@ -1,1 +1,10 @@
 Falling Sand Incorporation - noitafication - different materials from the gun that do different things
+
+you are what you drink.
+start, no ability to shoot. can just 'push', a single recoil boost per click
+then, big purple drink!, fills you up (visual indicator)
+now, piss it out lol!, you can run out.
+
+design platforming puzzles around different liquids. you have to
+get up and also kill enemies before you run out...
+mixing liquids??
