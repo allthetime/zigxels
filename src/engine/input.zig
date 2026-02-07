@@ -1,6 +1,8 @@
 const SDL = @import("sdl2");
 const std = @import("std");
 
+const AXIS_MAX: f32 = 32767.0; // 32767
+
 const PressedDirections = struct {
     up: bool = false,
     down: bool = false,
@@ -66,7 +68,7 @@ pub const InputState = struct {
                     }
                 },
                 .controller_button_down, .controller_button_up => |c| {
-                    std.debug.print("Controller button event: {}\n", .{c});
+                    // std.log.debug("Controller button event: {any}", .{c});
                     const is_pressed = c.button_state == .pressed;
                     switch (c.button) {
                         .dpad_up => self.dpad_state.pressed_directions.up = is_pressed,
@@ -90,7 +92,6 @@ pub const InputState = struct {
                 },
                 .controller_axis_motion => |c| {
                     const deadzone = 8000;
-                    const max_val = 32767.0;
                     switch (c.axis) {
                         .left_x => {
                             self.stick_state.pressed_directions.right = c.value > deadzone;
@@ -102,14 +103,14 @@ pub const InputState = struct {
                         },
                         .right_x => {
                             if (@abs(c.value) > deadzone) {
-                                self.right_stick_x = @as(f32, @floatFromInt(c.value)) / max_val;
+                                self.right_stick_x = @as(f32, @floatFromInt(c.value)) / AXIS_MAX;
                             } else {
                                 self.right_stick_x = 0.0;
                             }
                         },
                         .right_y => {
                             if (@abs(c.value) > deadzone) {
-                                self.right_stick_y = @as(f32, @floatFromInt(c.value)) / max_val;
+                                self.right_stick_y = @as(f32, @floatFromInt(c.value)) / AXIS_MAX;
                             } else {
                                 self.right_stick_y = 0.0;
                             }

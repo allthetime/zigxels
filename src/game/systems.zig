@@ -61,8 +61,29 @@ pub fn getWorldAABB(pos: Position, collider: Collider) c2.AABB {
 
 /// Helper to check if an AABB collides with ANY Ground entity
 fn checkCollision(world: *ecs.world_t, test_aabb: c2.AABB) bool {
-    const phys = ecs.singleton_get(world, components.PhysicsState) orelse return false;
-    var q_it = ecs.query_iter(world, phys.ground_query);
+    // const phys = ecs.singleton_get(world, components.PhysicsState) orelse return false;
+    // var q_it = ecs.query_iter(world, phys.ground_query);
+    // _ = ecs.singleton_set(world, PhysicsState, .{ .ground_query = ground_q });
+
+    // we want to ignore ground with components.ExplosionParticle
+    // this allows us to have temporary "ghost" ground pieces that exist visually but don't block the player, which is useful for explosion effects where we want the debris to fly through the air without causing additional collisions.
+    // By excluding entities with the ExplosionParticle component from collision checks, we can create more dynamic and visually interesting explosions without affecting gameplay mechanics. This also allows us to reuse the same ground entities for both solid terrain and temporary explosion effects, simplifying our entity management.
+    // In the future, we could expand this system to allow for different types of temporary ground effects (e.g., slippery ice that doesn't block but affects movement, or sticky goo that slows down entities) by adding additional components and logic to determine how they interact with the player and other entities.
+    // Note: We check for the ExplosionParticle component on the ground entities during the collision check. If an entity has this component, we simply skip it and don't consider it for collision, allowing the player to pass through it as if it were not there.
+    // This is a common technique in games to create temporary visual effects that don't interfere with gameplay, and it adds an extra layer of polish and immersion to our explosions without complicating our collision logic.
+    // In our current setup, explosion particles are created as separate entities with their own components, so they won't have the Ground tag and thus won't be included in the ground_query. However, if we were to create explosion particles that also have the Ground tag for visual purposes, we would need to ensure they also have a component (like ExplosionParticle) that allows us to exclude them from collision checks, as described above.
+    // This also means that we can have explosion particles that visually appear as part of the ground but don't actually block movement, which can create more dynamic and visually interesting explosions without affecting the player's ability to move through the environment.
+    // Overall, this approach allows us to maintain a clear separation between visual effects and gameplay mechanics, giving us more flexibility in how we design our explosions and their interactions with the player and the environment.
+    // In summary, by excluding entities with the ExplosionParticle component from collision checks, we can create temporary visual effects that enhance the game's aesthetics without interfering with gameplay, allowing for more dynamic and immersive explosions while keeping our collision logic straightforward and efficient.
+    // In our current implementation, we simply don't add the ExplosionParticle component to ground entities, so they won't be included in the ground_query at all. However, if we wanted to have some ground entities that also serve as explosion particles for visual purposes, we could add the ExplosionParticle component to those entities and then modify our collision check to skip any entities that have that component, ensuring they don't interfere with player movement while still providing the desired visual effect.
+
+    var desc = ecs.query_desc_t{};
+    desc.terms[0] = .{ .id = ecs.id(Ground) };
+    desc.terms[1] = .{ .id = ecs.id(Position), .inout = .In };
+    desc.terms[2] = .{ .id = ecs.id(Collider), .inout = .In };
+    desc.terms[3] = .{ .id = ecs.id(components.ExplosionParticle), .oper = .Not };
+    const ground_q = ecs.query_init(world, &desc) catch unreachable;
+    var q_it = ecs.query_iter(world, ground_q);
 
     while (ecs.query_next(&q_it)) {
         const g_positions = ecs.field(&q_it, Position, 1).?;
@@ -313,6 +334,14 @@ pub fn shoot_system(it: *ecs.iter_t, guns: []components.Gun, positions: []Positi
             const dir_x = dx / dist;
             const dir_y = dy / dist;
 
+            make_explosion(world, pos.x, pos.y, dir_x, dir_y, .{
+                .speed = 2000.0,
+                .spread = 0.0,
+                .color = 0xFF00FFFF,
+                .bounce = 0.0,
+                .randomness = 0.5,
+            }); // Muzzle Flash
+
             _ = ecs.set(world, bullet, Velocity, .{
                 .x = dir_x * BULLET_SPEED,
                 .y = dir_y * BULLET_SPEED,
@@ -534,7 +563,7 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
                             // Spawn explosion particles
                             const center_x = ground_aabb.min.x + gw / 2.0;
                             const center_y = ground_aabb.min.y + gh / 2.0;
-                            const rnd = std.crypto.random;
+                            // const rnd = std.crypto.random;
 
                             // Direction opposite to bullet velocity
                             const vel_len = std.math.sqrt(vel.x * vel.x + vel.y * vel.y);
@@ -545,34 +574,34 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
                                 dir_y = -vel.y / vel_len;
                             }
 
-                            for (0..10) |_| {
-                                const e = ecs.new_id(world);
+                            make_explosion(world, center_x, center_y, dir_x, dir_y, .{});
+                            //     for (0..10) |_| {
+                            //         const e = ecs.new_id(world);
 
-                                // Random spread
-                                const spread_angle = (rnd.float(f32) - 0.5) * 1.5;
-                                const cos_a = std.math.cos(spread_angle);
-                                const sin_a = std.math.sin(spread_angle);
+                            //         // Random spread
+                            //         const spread_angle = (rnd.float(f32) - 0.5) * 1.5;
+                            //         const cos_a = std.math.cos(spread_angle);
+                            //         const sin_a = std.math.sin(spread_angle);
 
-                                const p_vx = dir_x * cos_a - dir_y * sin_a;
-                                const p_vy = dir_x * sin_a + dir_y * cos_a;
+                            //         const p_vx = dir_x * cos_a - dir_y * sin_a;
+                            //         const p_vy = dir_x * sin_a + dir_y * cos_a;
 
-                                const speed = 100.0 + rnd.float(f32) * 150.0;
+                            //         const speed = 100.0 + rnd.float(f32) * 150.0;
 
-                                _ = ecs.set(world, e, Position, .{ .x = center_x, .y = center_y });
-                                _ = ecs.set(world, e, Velocity, .{ .x = p_vx * speed, .y = p_vy * speed });
-                                _ = ecs.set(world, e, Collider, .{
-                                    .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 1 },
-                                });
-                                _ = ecs.set(world, e, components.ExplosionParticle, .{
-                                    .lifetime = 0.3 + rnd.float(f32) * 0.4,
-                                    .color = 0x00FF00FF,
-                                });
-                                // Add PhysicsBody so they move and have gravity
-                                _ = ecs.set(world, e, PhysicsBody, .{
-                                    .restitution = 0.3,
-                                    .friction = 0.8,
-                                });
-                            }
+                            //         _ = ecs.set(world, e, Position, .{ .x = center_x, .y = center_y });
+                            //         _ = ecs.set(world, e, Velocity, .{ .x = p_vx * speed, .y = p_vy * speed });
+                            //         _ = ecs.set(world, e, Collider, .{
+                            //             .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 1 },
+                            //         });
+                            //         _ = ecs.set(world, e, components.ExplosionParticle, .{
+                            //             .lifetime = 0.3 + rnd.float(f32) * 0.4,
+                            //             .color = 0x00FF00FF,
+                            //         });
+                            //         _ = ecs.set(world, e, PhysicsBody, .{
+                            //             .restitution = 0.3,
+                            //             .friction = 0.8,
+                            //         });
+                            //     }
                         }
 
                         // Queue Bullet Deletion
@@ -596,6 +625,56 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
     }
     for (0..doomed_bullet_count) |i| {
         ecs.delete(world, doomed_bullets[i]);
+    }
+}
+
+const ExplosionOptions = struct {
+    speed: f32 = 150.0,
+    spread: f32 = 1.5,
+    color: u32 = 0x00FF00FF,
+    bounce: f32 = 0.3,
+    randomness: f32 = 1.0, // Additional random velocity factor (0.0 = no randomness, 1.0 = full random direction)
+};
+
+fn make_explosion(world: *ecs.world_t, x: f32, y: f32, dir_x: f32, dir_y: f32, options: ExplosionOptions) void {
+    const rnd = std.crypto.random;
+    for (0..10) |_| {
+        const e = ecs.new_id(world);
+
+        // Random spread
+        const spread_angle = ((rnd.float(f32)) - 0.5) * options.spread;
+        const cos_a = std.math.cos(spread_angle);
+        const sin_a = std.math.sin(spread_angle);
+
+        const p_vx = dir_x * cos_a - dir_y * sin_a;
+        const p_vy = dir_x * sin_a + dir_y * cos_a;
+
+        const speed = 100.0 + (rnd.float(f32) * options.randomness) * options.speed;
+
+        _ = ecs.set(world, e, Position, .{ .x = x, .y = y });
+        //
+        // HERE
+        // making explosion Ground
+        // has weird smoke effect
+        // fucks up the system though
+        // see manual query and note in checkCollision about ignoring ExplosionParticle in ground_query
+        //
+        // ecs.add(world, e, Ground);
+        _ = ecs.set(world, e, Velocity, .{ .x = p_vx * speed, .y = p_vy * speed });
+        // _ = ecs.set(world, e, Collider, .{
+        //     .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 1 },
+        // });
+        _ = ecs.set(world, e, Collider, .{
+            .box = .{ .min = .{ .x = -2, .y = -2 }, .max = .{ .x = 2, .y = 2 } },
+        });
+        _ = ecs.set(world, e, components.ExplosionParticle, .{
+            .lifetime = 0.3 + rnd.float(f32) * 0.4,
+            .color = options.color,
+        });
+        _ = ecs.set(world, e, PhysicsBody, .{
+            .restitution = options.bounce,
+            .friction = 0.8,
+        });
     }
 }
 
@@ -625,7 +704,7 @@ pub fn explosion_system(it: *ecs.iter_t, positions: []Position, velocities: []Ve
         const color = setAlpha(p.color, alpha);
         // Render specially to pixel buffer
         // 1x1 pixel
-        pixel_mod.drawRect(engine, f32_to_i32(pos.x), f32_to_i32(pos.y), 2, 2, color);
+        pixel_mod.drawRect(engine, f32_to_i32(pos.x), f32_to_i32(pos.y), 4, 4, color);
     }
 }
 

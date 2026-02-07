@@ -271,6 +271,7 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) !void
     desc.terms[0] = .{ .id = ecs.id(Ground) };
     desc.terms[1] = .{ .id = ecs.id(Position), .inout = .In };
     desc.terms[2] = .{ .id = ecs.id(Collider), .inout = .In };
+    // desc.terms[3] = .{ .id = ecs.id(components.ExplosionParticle), .oper = .Not };
     const ground_q = ecs.query_init(world, &desc) catch unreachable;
     _ = ecs.singleton_set(world, PhysicsState, .{ .ground_query = ground_q });
 
