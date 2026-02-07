@@ -236,7 +236,9 @@ pub fn shoot_system(it: *ecs.iter_t, guns: []components.Gun, positions: []Positi
 
         const bullet = ecs.new_id(world);
         ecs.add(world, bullet, Bullet); // TAG
-        ecs.add(world, bullet, PhysicsBody); // NEW: Bullet is physics controlled
+        _ = ecs.set(world, bullet, PhysicsBody, .{
+            .friction = 0.99,
+        }); // NEW: Bullet is physics controlled
 
         // Add to Group
         if (bullets_group) |group| {
@@ -414,7 +416,7 @@ pub fn gun_aim_system(it: *ecs.iter_t, gun_positions: []Position) void {
     }
 }
 
-fn resolveBody(pos: *Position, vel: *Velocity, n: c2.Vec2, depth: f32) void {
+fn resolveBody(pos: *Position, vel: *Velocity, n: c2.Vec2, depth: f32, body: *PhysicsBody) void {
     // 1. Un-penetrate (Push out)
     // We add a tiny epsilon (0.01) to prevent floating point re-penetration
     const push = depth + 0.01;
@@ -427,10 +429,10 @@ fn resolveBody(pos: *Position, vel: *Velocity, n: c2.Vec2, depth: f32) void {
     const v_dot_n = (vel.x * n.x) + (vel.y * n.y);
     if (v_dot_n > 0) {
         // Restitution: 0.8 = Bouncy, 0.1 = Dead weight
-        const restitution: f32 = 0.9;
+        const restitution: f32 = body.restitution; // We can have different restitution per body for variety
 
         // Friction: 0.9 = Rough, 1.0 = No Friction
-        const friction: f32 = 0.99;
+        const friction: f32 = body.friction; // We can also have different friction per body
 
         // vn = component of velocity perpendicular to wall (Impact velocity)
         const vn_x = n.x * v_dot_n;
@@ -447,7 +449,7 @@ fn resolveBody(pos: *Position, vel: *Velocity, n: c2.Vec2, depth: f32) void {
     }
 }
 
-pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, colliders: []Collider) void {
+pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, colliders: []Collider, physicsBodies: []PhysicsBody) void {
     const world = it.world;
     const phys = ecs.singleton_get(world, components.PhysicsState) orelse return;
 
@@ -472,7 +474,7 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
                 .max = .{ .x = ground_shape.max.x + gp.x, .y = ground_shape.max.y + gp.y },
             };
 
-            for (positions, velocities, colliders, 0..) |*pos, *vel, col, entity_idx| {
+            for (positions, velocities, colliders, physicsBodies, 0..) |*pos, *vel, col, *pb, entity_idx| {
                 var m: c2.Manifold = undefined;
                 m.count = 0;
 
@@ -512,7 +514,7 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
                         // In the future, we could expand this system to allow for different types of destructible terrain (e.g., wood that takes 2 hits, stone that takes 5 hits) by adding a "Health" component to ground entities and reducing it on each hit until it reaches zero, at which point we delete the entity.
                         if (!ecs.has_id(world, ground_entity, ecs.id(components.Destroyable))) {
                             // Not destroyable, just bounce bullet as normal
-                            resolveBody(pos, vel, m.n, m.depths[0]);
+                            resolveBody(pos, vel, m.n, m.depths[0], pb);
                             continue;
                         }
 
@@ -536,6 +538,49 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
 
                             doomed_ground[doomed_ground_count] = ground_entity;
                             doomed_ground_count += 1;
+
+                            // Spawn explosion particles
+                            const center_x = ground_aabb.min.x + gw / 2.0;
+                            const center_y = ground_aabb.min.y + gh / 2.0;
+                            const rnd = std.crypto.random;
+
+                            // Direction opposite to bullet velocity
+                            const vel_len = std.math.sqrt(vel.x * vel.x + vel.y * vel.y);
+                            var dir_x: f32 = 0;
+                            var dir_y: f32 = 0;
+                            if (vel_len > 0) {
+                                dir_x = -vel.x / vel_len;
+                                dir_y = -vel.y / vel_len;
+                            }
+
+                            for (0..10) |_| {
+                                const e = ecs.new_id(world);
+
+                                // Random spread
+                                const spread_angle = (rnd.float(f32) - 0.5) * 1.5;
+                                const cos_a = std.math.cos(spread_angle);
+                                const sin_a = std.math.sin(spread_angle);
+
+                                const p_vx = dir_x * cos_a - dir_y * sin_a;
+                                const p_vy = dir_x * sin_a + dir_y * cos_a;
+
+                                const speed = 100.0 + rnd.float(f32) * 150.0;
+
+                                _ = ecs.set(world, e, Position, .{ .x = center_x, .y = center_y });
+                                _ = ecs.set(world, e, Velocity, .{ .x = p_vx * speed, .y = p_vy * speed });
+                                _ = ecs.set(world, e, Collider, .{
+                                    .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 1 },
+                                });
+                                _ = ecs.set(world, e, components.ExplosionParticle, .{
+                                    .lifetime = 0.3 + rnd.float(f32) * 0.4,
+                                    .color = 0x00FF00FF,
+                                });
+                                // Add PhysicsBody so they move and have gravity
+                                _ = ecs.set(world, e, PhysicsBody, .{
+                                    .restitution = 0.3,
+                                    .friction = 0.8,
+                                });
+                            }
                         }
 
                         // Queue Bullet Deletion
@@ -547,7 +592,7 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
                         // slow bullet on hit (optional, can be removed for instant destruction)
                         vel.x *= 0.5;
                     } else {
-                        resolveBody(pos, vel, m.n, m.depths[0]);
+                        resolveBody(pos, vel, m.n, m.depths[0], pb);
                     }
                 }
             }
@@ -568,4 +613,30 @@ pub fn physics_movement_system(it: *ecs.iter_t, positions: []Position, velocitie
         pos.x += vel.x * dt;
         pos.y += vel.y * dt;
     }
+}
+
+pub fn explosion_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, particles: []components.ExplosionParticle) void {
+    const dt = it.delta_time;
+    const engine = Engine.getEngine(it.world);
+
+    _ = velocities; // We don't actually need to update velocity here, but we include it in the query for easy access if we want to add movement to particles later (e.g., gravity or fading out)
+
+    for (positions, particles, 0..) |*pos, *p, i| {
+        p.lifetime -= dt;
+
+        if (p.lifetime <= 0) {
+            ecs.delete(it.world, it.entities()[i]);
+            continue;
+        }
+
+        const alpha = @as(u8, @intFromFloat((p.lifetime / 0.7) * 255)); // Fade out over time (assuming max lifetime is around 0.7s)
+        const color = setAlpha(p.color, alpha);
+        // Render specially to pixel buffer
+        // 1x1 pixel
+        pixel_mod.drawRect(engine, f32_to_i32(pos.x), f32_to_i32(pos.y), 2, 2, color);
+    }
+}
+
+fn setAlpha(color: u32, alpha: u8) u32 {
+    return (color & 0xFFFFFF00) | (@as(u32, alpha) << 24);
 }

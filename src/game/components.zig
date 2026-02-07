@@ -21,12 +21,20 @@ pub const Gun = struct {
     bullet_speed: f32 = 1000.0,
 };
 
+pub const ExplosionParticle = struct {
+    lifetime: f32,
+    color: u32,
+};
+
 // tag!
 pub const Bullet = struct {};
 pub const Player = struct {};
 pub const Ground = struct {};
 pub const Destroyable = struct {};
-pub const PhysicsBody = struct {};
+pub const PhysicsBody = struct {
+    restitution: f32 = 0.9,
+    friction: f32 = 0.99,
+};
 
 // singletons for easy access
 

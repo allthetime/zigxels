@@ -32,6 +32,7 @@ const PhysicsBody = components.PhysicsBody;
 
 // render
 const Renderable = components.Renderable;
+const ExplosionParticle = components.ExplosionParticle;
 
 // tags
 const Bullet = components.Bullet;
@@ -229,12 +230,13 @@ fn register_components(world: *ecs.world_t) void {
     ecs.COMPONENT(world, PlayerContainer);
     ecs.COMPONENT(world, PhysicsState);
     ecs.COMPONENT(world, Gun);
+    ecs.COMPONENT(world, ExplosionParticle);
 
     // TAGS (size 0)
     ecs.TAG(world, Bullet);
     ecs.TAG(world, Player);
     ecs.TAG(world, Ground);
-    ecs.TAG(world, PhysicsBody);
+    ecs.COMPONENT(world, PhysicsBody);
     // ecs.TAG(world, Gun);
     ecs.TAG(world, Destroyable);
 }
@@ -288,6 +290,12 @@ fn register_systems(world: *ecs.world_t) void {
         .{ .id = ecs.id(Bullet) },
     });
 
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "explosion", ecs.OnUpdate, game.explosion_system, &.{
+        .{ .id = ecs.id(Position) },
+        .{ .id = ecs.id(Velocity) },
+        .{ .id = ecs.id(components.ExplosionParticle) },
+    });
+
     // Single unified pixel render system
     _ = ecs.ADD_SYSTEM(world, "render", ecs.OnStore, game.render_system);
 }
@@ -296,7 +304,8 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) !void
     const player = ecs.new_entity(world, "Player");
     _ = ecs.set(world, player, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 2.0 });
     _ = ecs.set(world, player, Velocity, .{ .x = 0.0, .y = 0.0 });
-    _ = ecs.set(world, player, Collider, .{ .box = .{ .min = .{ .x = -25, .y = -25 }, .max = .{ .x = 25, .y = 25 } } });
+    // _ = ecs.set(world, player, Collider, .{ .box = .{ .min = .{ .x = -25, .y = -25 }, .max = .{ .x = 25, .y = 25 } } });
+    _ = ecs.set(world, player, Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 15 } });
     _ = ecs.set(world, player, Renderable, .{ .color = SDL.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
     ecs.add(world, player, Player);
     _ = ecs.singleton_set(world, PlayerContainer, .{ .entity = player });
@@ -314,7 +323,7 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) !void
     _ = ecs.set(world, gun, Gun, .{
         .fire_rate = 0.05,
     });
-    ecs.add(world, gun, PhysicsBody);
+    // ecs.add(world, gun, PhysicsBody);
     _ = ecs.add_pair(world, gun, ecs.ChildOf, player);
 
     spawn_level(world, engine);
