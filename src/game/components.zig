@@ -40,7 +40,12 @@ pub const PhysicsBody = struct {
     friction: f32 = 0.99,
 };
 
+pub const GroundGrid = struct {};
+
 // singletons for easy access
+pub const GroundGroup = struct {
+    entity: ecs.entity_t,
+};
 
 pub const BulletsGroup = struct {
     entity: ecs.entity_t,
@@ -63,8 +68,28 @@ pub const VerletState = struct {
     friction: f32 = 0.95, // 1.0 = vacuum, 0.9 = air resistance
 };
 
-pub const DistanceConstraint = struct {
-    target: ecs.entity_t, // The entity this constraint attaches to
-    target_dist: f32, // Desired distance
-    stiffness: f32 = 1.0, // 1.0 = Rigid, <1.0 = Elastic/Springy
+// pub const DistanceConstraint = struct {
+//     target: ecs.entity_t, // The entity this constraint attaches to
+//     target_dist: f32, // Desired distance
+//     stiffness: f32 = 1.0, // 1.0 = Rigid, <1.0 = Elastic/Springy
+// };
+
+// pub const TendencyTowards = struct {
+//     target: ecs.entity_t,
+//     strength: f32,
+// };
+
+// pub const ConstraintData = struct {
+//     dist: f32 = 0.0,
+//     stiffness: f32 = 1.0,
+// };
+
+// new multi-constraint system
+
+pub const AttachedTo = struct {
+    dist: f32 = 0.0,
+    stiffness: f32 = 1.0,
+};
+pub const ReachTowards = struct {
+    stiffness: f32 = 1.0,
 };

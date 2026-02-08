@@ -9,6 +9,8 @@ const input_mod = @import("../engine/input.zig");
 const pixel_mod = @import("../engine/pixels.zig");
 const Effect = @import("../engine/effects.zig").Effect;
 
+// const pixel_mod = @import("../engine/pixels.zig");
+
 const Position = components.Position;
 const Velocity = components.Velocity;
 const Target = components.Target;
@@ -789,33 +791,37 @@ pub fn verlet_integration_system(it: *ecs.iter_t, positions: []Position, verlets
     }
 }
 
-pub fn constraint_solver_system(it: *ecs.iter_t, positions: []Position, constraints: []components.DistanceConstraint) void {
-    const world = it.world;
+// pub fn constraint_solver_system(it: *ecs.iter_t, positions: []Position, constraints: []components.DistanceConstraint) void {
+//     const world = it.world;
 
-    for (0..it.count()) |i| {
-        const cons = constraints[i];
-        const pos = &positions[i];
+//     for (0..8) |_| { // More iterations = stiffer, more responsive chain
+//         for (0..it.count()) |i| {
+//             const child_pos = &positions[i];
+//             const c = constraints[i];
+//             const parent_pos = ecs.get_mut(world, c.target, Position) orelse continue;
 
-        // 1. Get the target (Player or previous segment)
-        const target_pos = ecs.get(world, cons.target, Position) orelse continue;
+//             const dx = child_pos.x - parent_pos.x;
+//             const dy = child_pos.y - parent_pos.y;
+//             const dist = @sqrt(dx * dx + dy * dy);
 
-        // 2. Vector from Segment to Target
-        const dx = target_pos.x - pos.x;
-        const dy = target_pos.y - pos.y;
-        const current_dist = @sqrt(dx * dx + dy * dy);
+//             if (dist > c.target_dist) {
+//                 const diff = (dist - c.target_dist) / dist;
+//                 const tx = dx * diff * 0.5; // Split the correction
+//                 const ty = dy * diff * 0.5;
 
-        if (current_dist == 0) continue;
+//                 // Move child toward parent
+//                 child_pos.x -= tx;
+//                 child_pos.y -= ty;
 
-        // 3. How much do we need to move to hit target_dist?
-        // If current_dist is 10 and target_dist is 6, we need to move 4 units closer.
-        const delta = (current_dist - cons.target_dist) / current_dist;
-
-        // 4. Apply the correction
-        // We move the segment TOWARD the target by the delta amount
-        pos.x += dx * delta * cons.stiffness;
-        pos.y += dy * delta * cons.stiffness;
-    }
-}
+//                 // PULL parent toward child (Only if parent isn't the Player!)
+//                 if (!ecs.has_id(world, c.target, ecs.id(components.Player))) {
+//                     parent_pos.x += tx;
+//                     parent_pos.y += ty;
+//                 }
+//             }
+//         }
+//     }
+// }
 
 pub fn drawCirclePixels(engine: *Engine, cx: f32, cy: f32, radius: f32, color: u32) void {
     const segments: usize = 32;
@@ -888,8 +894,8 @@ pub fn debug_draw_colliders_with_sdl2_render(world: *ecs.world_t) void {
     const engine = Engine.getEngine(world);
 
     const debug_red = pixel_mod.packColor(255, 0, 0, 255);
-    const debug_magenta = pixel_mod.packColor(255, 0, 255, 255);
-    const debug_cyan = pixel_mod.packColor(0, 255, 255, 255);
+    // const debug_magenta = pixel_mod.packColor(255, 0, 255, 255);
+    // const debug_cyan = pixel_mod.packColor(0, 255, 255, 255);
 
     var desc = ecs.query_desc_t{};
     desc.terms[0] = .{ .id = ecs.id(Position), .inout = .In };
@@ -905,29 +911,136 @@ pub fn debug_draw_colliders_with_sdl2_render(world: *ecs.world_t) void {
     }
 
     // --- LOOP 2: Draw the Constraints (Dedicated and safe) ---
-    var cons_desc = ecs.query_desc_t{};
-    cons_desc.terms[0] = .{ .id = ecs.id(Position), .inout = .In };
-    cons_desc.terms[1] = .{ .id = ecs.id(components.DistanceConstraint), .inout = .In };
-    cons_desc.terms[2] = .{
-        .id = ecs.id(components.Collider),
-    };
-    const cons_q = ecs.query_init(world, &cons_desc) catch unreachable;
-    var cons_it = ecs.query_iter(world, cons_q);
+    // var cons_desc = ecs.query_desc_t{};
+    // cons_desc.terms[0] = .{ .id = ecs.id(Position), .inout = .In };
+    // cons_desc.terms[1] = .{ .id = ecs.id(components.DistanceConstraint), .inout = .In };
+    // cons_desc.terms[2] = .{
+    //     .id = ecs.id(components.Collider),
+    // };
+    // const cons_q = ecs.query_init(world, &cons_desc) catch unreachable;
+    // var cons_it = ecs.query_iter(world, cons_q);
 
-    while (ecs.query_next(&cons_it)) {
-        const positions = ecs.field(&cons_it, Position, 0).?;
-        const constraints = ecs.field(&cons_it, components.DistanceConstraint, 1).?;
-        const colliders = ecs.field(&cons_it, Collider, 2).?;
+    // while (ecs.query_next(&cons_it)) {
+    //     const positions = ecs.field(&cons_it, Position, 0).?;
+    //     const constraints = ecs.field(&cons_it, components.DistanceConstraint, 1).?;
+    //     const colliders = ecs.field(&cons_it, Collider, 2).?;
 
-        draw_colliders(positions, colliders, engine, 2, debug_magenta);
+    //     draw_colliders(positions, colliders, engine, 2, debug_magenta);
 
-        for (0..cons_it.count()) |i| {
-            const p = positions[i];
-            const cons = constraints[i];
+    //     for (0..cons_it.count()) |i| {
+    //         const p = positions[i];
+    //         const cons = constraints[i];
 
-            // Look up the target's position directly
-            if (ecs.get(world, cons.target, Position)) |target_p| {
-                drawLinePixels(engine, p.x, p.y, target_p.x, target_p.y, debug_cyan);
+    //         // Look up the target's position directly
+    //         if (ecs.get(world, cons.target, Position)) |target_p| {
+    //             drawLinePixels(engine, p.x, p.y, target_p.x, target_p.y, debug_cyan);
+    //         }
+    //     }
+    // }
+}
+
+pub fn draw_attached_constraints_system(it: *ecs.iter_t) void {
+    const world = it.world;
+
+    // Term 1 is the Pair (AttachedTo, Target)
+    // Term 2 is the Subject's Position
+    const pair_id = it.ids.?[0];
+    const target_id = ecs.pair_second(pair_id);
+    const positions = ecs.field(it, components.Position, 1).?;
+
+    // We need the engine/renderer context to draw
+    // Assuming you stored your engine in the Flecs context
+    const engine = Engine.getEngine(world);
+
+    for (positions) |pos| {
+        // Get the parent position
+        if (ecs.get(world, target_id, components.Position)) |parent_pos| {
+            const color = pixel_mod.packColor(100, 100, 255, 255); // Light blue for constraints
+
+            // Draw a line from child to parent
+            // Replace with your actual line drawing function
+            drawLinePixels(engine, pos.x, pos.y, parent_pos.x, parent_pos.y, color);
+            // draw_line(engine, pos.x, pos.y, parent_pos.x, parent_pos.y, color);
+        }
+    }
+}
+
+// pub fn tend_towards_system(it: *ecs.iter_t, positions: []Position, targets: []components.TendencyTowards) void {
+//     const world = it.world;
+//     for (positions, targets) |*pos, target_cfg| {
+//         const t_pos = ecs.get(world, target_cfg.target, Position) orelse continue;
+
+//         const dx = t_pos.x - pos.x;
+//         const dy = t_pos.y - pos.y;
+
+//         // Nudge the node toward the target
+//         pos.x += dx * target_cfg.strength * it.delta_time;
+//         pos.y += dy * target_cfg.strength * it.delta_time;
+//     }
+// }
+
+pub fn reach_system(it: *ecs.iter_t) void {
+    // Data is retrieved using the Relation ID
+    const reach_data = ecs.field(it, components.ReachTowards, 0).?;
+    const pair_id = it.ids.?[0];
+    const target_id = ecs.pair_second(pair_id);
+    const positions = ecs.field(it, components.Position, 1).?;
+
+    for (reach_data, positions) |data, *pos| {
+        const t_pos = ecs.get(it.world, target_id, components.Position) orelse continue;
+        // One-way nudge logic
+        // pos.x += (t_pos.x - pos.x) * data.stiffness;
+        // pos.y += (t_pos.y - pos.y) * data.stiffness;
+        const dx = t_pos.x - pos.x;
+        const dy = t_pos.y - pos.y;
+
+        // Nudge the node toward the target
+        pos.x += dx * data.stiffness * it.delta_time;
+        pos.y += dy * data.stiffness * it.delta_time;
+    }
+}
+
+pub fn attachment_solver_system(it: *ecs.iter_t) void {
+    const world = it.world;
+
+    // 1. Get resolved Pair ID from Term 1 (AttachedTo, Target)
+    const pair_id = it.ids.?[0];
+    const target_id = ecs.pair_second(pair_id);
+
+    // 2. Get Data Fields (1-based indices)
+    const constraints = ecs.field(it, components.AttachedTo, 0).?;
+    const positions = ecs.field(it, components.Position, 1).?;
+
+    // 3. Relaxation Loop
+    for (0..8) |_| {
+        for (0..it.count()) |i| {
+            const data = constraints[i];
+            const child_pos = &positions[i];
+
+            // Get parent position (get_mut because we modify it)
+            const parent_pos = ecs.get_mut(world, target_id, components.Position) orelse continue;
+
+            const dx = child_pos.x - parent_pos.x;
+            const dy = child_pos.y - parent_pos.y;
+            const dist = @sqrt(dx * dx + dy * dy);
+
+            // Using dist > 0 to avoid division by zero
+            if (dist > 0.0001) {
+                // RIGID logic: solve for BOTH extension and compression
+                const diff = (dist - data.dist) / dist;
+
+                // stiffness 1.0 = rigid bone, < 1.0 = elastic
+                const tx = dx * diff * 0.5 * data.stiffness;
+                const ty = dy * diff * 0.5 * data.stiffness;
+
+                child_pos.x -= tx;
+                child_pos.y -= ty;
+
+                // Pull parent toward child if it's not a static anchor (Player)
+                if (!ecs.has_id(world, target_id, ecs.id(components.Player))) {
+                    parent_pos.x += tx;
+                    parent_pos.y += ty;
+                }
             }
         }
     }
