@@ -29,6 +29,7 @@ pub const InputState = struct {
     controller: ?SDL.GameController = null,
     right_stick_x: f32 = 0.0,
     right_stick_y: f32 = 0.0,
+    debug_mode: bool = false,
 
     keyboard_state: DirectionsWithShooting = DirectionsWithShooting{
         .pressed_directions = PressedDirections{},
@@ -149,6 +150,11 @@ pub const InputState = struct {
                         .r => {
                             if (k.key_state == .pressed and k.is_repeat == false) {
                                 self.reset = true;
+                            }
+                        },
+                        .grave => {
+                            if (k.key_state == .pressed and k.is_repeat == false) {
+                                self.debug_mode = !self.debug_mode;
                             }
                         },
                         else => {},

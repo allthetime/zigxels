@@ -52,3 +52,18 @@ pub const PlayerContainer = struct {
 pub const PhysicsState = struct {
     ground_query: *ecs.query_t,
 };
+
+// IK
+
+pub const VerletState = struct {
+    old_x: f32,
+    old_y: f32,
+    mass: f32 = 1.0, // 0.0 represents infinite mass (Pinned/Anchor)
+    friction: f32 = 0.95, // 1.0 = vacuum, 0.9 = air resistance
+};
+
+pub const DistanceConstraint = struct {
+    target: ecs.entity_t, // The entity this constraint attaches to
+    target_dist: f32, // Desired distance
+    stiffness: f32 = 1.0, // 1.0 = Rigid, <1.0 = Elastic/Springy
+};
