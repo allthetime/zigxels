@@ -90,6 +90,8 @@ pub fn main() !void {
         const cursorSize = updateCursorSize(input.is_pressing, &cursor_size);
         try renderMouseCursor(engine.renderer, &input, cursorSize);
 
+        if (input.debug_mode) game.debug_draw_colliders_with_sdl2_render(world);
+
         watch_for_reset_and_do_it(&input, reset_game, world, &engine);
 
         engine.renderer.present();
@@ -182,6 +184,10 @@ fn register_components(world: *ecs.world_t) void {
     ecs.COMPONENT(world, PhysicsState);
     ecs.COMPONENT(world, BulletsGroup);
     ecs.COMPONENT(world, PlayerContainer);
+
+    // ik
+    ecs.COMPONENT(world, components.VerletState);
+    ecs.COMPONENT(world, components.DistanceConstraint);
 }
 
 fn register_systems(world: *ecs.world_t) void {
@@ -203,12 +209,24 @@ fn register_systems(world: *ecs.world_t) void {
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "gravity", ecs.OnUpdate, game.gravity_system, &.{
         .{ .id = ecs.id(Velocity) },
         .{ .id = ecs.id(PhysicsBody) },
+        .{ .id = ecs.id(components.VerletState), .oper = .Not },
     });
 
     // Shoot system (explicit filter for Player)
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "shoot", ecs.OnUpdate, game.shoot_system, &.{
         .{ .id = ecs.id(Gun) },
         .{ .id = ecs.id(Position) },
+    });
+
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "verlet_integration", ecs.OnUpdate, game.verlet_integration_system, &.{
+        .{ .id = ecs.id(Position) },
+        .{ .id = ecs.id(Velocity) },
+        .{ .id = ecs.id(components.VerletState) },
+    });
+
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "constraint_solver", ecs.OnUpdate, game.constraint_solver_system, &.{
+        .{ .id = ecs.id(Position) },
+        .{ .id = ecs.id(components.DistanceConstraint) },
     });
 
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "gun_aim", ecs.OnUpdate, game.gun_aim_system, &.{
@@ -220,6 +238,8 @@ fn register_systems(world: *ecs.world_t) void {
         .{ .id = ecs.id(Position) },
         .{ .id = ecs.id(Velocity) },
         .{ .id = ecs.id(PhysicsBody) },
+        // IMPORTANT: Exclude entities that have VerletState
+        .{ .id = ecs.id(components.VerletState), .oper = .Not },
     });
 
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "physics_collision", ecs.OnUpdate, game.physics_collision_system, &.{
@@ -245,6 +265,41 @@ fn register_systems(world: *ecs.world_t) void {
 
     // Single unified pixel render system
     _ = ecs.ADD_SYSTEM(world, "render", ecs.OnStore, game.render_system);
+
+    // _ = ecs.ADD_SYSTEM(world, "debug_render", ecs.OnStore, game.debug_draw_colliders_with_sdl2_render);
+}
+
+fn spawn_player_tail(world: *ecs.world_t, player: ecs.entity_t) void {
+    var parent = player;
+    const segment_count = 5;
+    const segment_dist = 10.0;
+
+    const p_pos = ecs.get(world, player, Position).?;
+    const friction_base = 0.7;
+
+    var i: usize = 0;
+    while (i < segment_count) : (i += 1) {
+        const seg = ecs.new_id(world);
+        const start_x = p_pos.x - (@as(f32, @floatFromInt(i + 1)) * segment_dist);
+        const start_y = p_pos.y;
+        const segment_friction = friction_base - (@as(f32, @floatFromInt(i)) * 0.01);
+
+        _ = ecs.set(world, seg, Position, .{ .x = start_x, .y = start_y });
+        _ = ecs.set(world, seg, components.VerletState, .{
+            .old_x = start_x,
+            .old_y = start_y,
+            .friction = segment_friction,
+        });
+        _ = ecs.set(world, seg, Velocity, .{ .x = 0, .y = 0 }); // Required for integration
+        _ = ecs.set(world, seg, components.DistanceConstraint, .{ .target = parent, .target_dist = segment_dist, .stiffness = 0.7 });
+        _ = ecs.set(world, seg, Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 3.0 } });
+
+        // Add PhysicsBody! This allows existing gravity_system and physics_collision_system to work.
+        _ = ecs.set(world, seg, PhysicsBody, .{ .restitution = 0.3, .friction = 0.9 });
+        _ = ecs.set(world, seg, Renderable, .{ .color = SDL.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } });
+
+        parent = seg;
+    }
 }
 
 fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) !void {
@@ -264,6 +319,7 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) !void
     _ = ecs.set(world, gun, Gun, .{ .fire_rate = 0.05 });
     _ = ecs.add_pair(world, gun, ecs.ChildOf, player);
 
+    spawn_player_tail(world, player);
     spawn_level(world, engine);
 
     // Cache the Ground Query for Physics Systems

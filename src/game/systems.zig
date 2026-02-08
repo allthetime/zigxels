@@ -334,13 +334,13 @@ pub fn shoot_system(it: *ecs.iter_t, guns: []components.Gun, positions: []Positi
             const dir_x = dx / dist;
             const dir_y = dy / dist;
 
-            make_explosion(world, pos.x, pos.y, dir_x, dir_y, .{
-                .speed = 2000.0,
-                .spread = 0.0,
-                .color = 0xFF00FFFF,
-                .bounce = 0.0,
-                .randomness = 0.5,
-            }); // Muzzle Flash
+            // make_explosion(world, pos.x, pos.y, dir_x, dir_y, .{
+            //     .speed = 2000.0,
+            //     .spread = 0.0,
+            //     .color = 0xFF00FFFF,
+            //     .bounce = 0.0,
+            //     .randomness = 0.5,
+            // }); // Muzzle Flash
 
             _ = ecs.set(world, bullet, Velocity, .{
                 .x = dir_x * BULLET_SPEED,
@@ -737,4 +737,147 @@ pub fn right_controller_stick_set_mouse_xy_system(it: *ecs.iter_t) void {
         }
     }
     _ = ecs.singleton_set(world, input_mod.InputState, input.*);
+}
+
+// IK
+//
+//
+
+pub fn verlet_integration_system(it: *ecs.iter_t, positions: []Position, verlets: []components.VerletState) void {
+    const dt = it.delta_time;
+
+    for (positions, verlets) |*pos, *vs| {
+        // 1. Calculate velocity from the distance moved since last frame
+        const vx = (pos.x - vs.old_x) * vs.friction;
+        const vy = (pos.y - vs.old_y) * vs.friction;
+
+        // 2. Update 'old' position to current
+        vs.old_x = pos.x;
+        vs.old_y = pos.y;
+
+        // 3. Apply the movement + Gravity
+        pos.x += vx;
+        pos.y += vy + (GRAVITY * 2 * dt * dt);
+    }
+}
+
+pub fn constraint_solver_system(it: *ecs.iter_t, positions: []Position, constraints: []components.DistanceConstraint) void {
+    const world = it.world;
+
+    for (0..it.count()) |i| {
+        const cons = constraints[i];
+        const pos = &positions[i];
+
+        // 1. Get the target (Player or previous segment)
+        const target_pos = ecs.get(world, cons.target, Position) orelse continue;
+
+        // 2. Vector from Segment to Target
+        const dx = target_pos.x - pos.x;
+        const dy = target_pos.y - pos.y;
+        const current_dist = @sqrt(dx * dx + dy * dy);
+
+        if (current_dist == 0) continue;
+
+        // 3. How much do we need to move to hit target_dist?
+        // If current_dist is 10 and target_dist is 6, we need to move 4 units closer.
+        const delta = (current_dist - cons.target_dist) / current_dist;
+
+        // 4. Apply the correction
+        // We move the segment TOWARD the target by the delta amount
+        pos.x += dx * delta * cons.stiffness;
+        pos.y += dy * delta * cons.stiffness;
+    }
+}
+
+pub fn drawCircleLines(renderer: SDL.Renderer, cx: f32, cy: f32, radius: f32) void {
+    const segments: usize = 16;
+    const step = (std.math.pi * 2.0) / @as(f32, @floatFromInt(segments));
+
+    var i: usize = 0;
+    while (i < segments) : (i += 1) {
+        const theta1 = @as(f32, @floatFromInt(i)) * step;
+        const theta2 = @as(f32, @floatFromInt(i + 1)) * step;
+
+        const x1 = cx + @cos(theta1) * radius;
+        const y1 = cy + @sin(theta1) * radius;
+        const x2 = cx + @cos(theta2) * radius;
+        const y2 = cy + @sin(theta2) * radius;
+
+        _ = renderer.drawLine(@intFromFloat(x1), @intFromFloat(y1), @intFromFloat(x2), @intFromFloat(y2)) catch {};
+    }
+}
+
+fn draw_colliders(positions: []Position, colliders: []Collider, engine: *Engine, up_size: f32) void {
+    var i: usize = 0;
+    while (i < positions.len) : (i += 1) {
+        const p = positions[i];
+        const col = colliders[i];
+
+        switch (col) {
+            .circle => |c| {
+                const world_x = p.x + c.p.x;
+                const world_y = p.y + c.p.y;
+                drawCircleLines(engine.renderer, world_x, world_y, c.r + up_size);
+            },
+            .box => |b| {
+                const rect = SDL.Rectangle{
+                    .x = @intFromFloat(p.x + b.min.x),
+                    .y = @intFromFloat(p.y + b.min.y),
+                    .width = @intFromFloat(b.max.x - b.min.x + up_size),
+                    .height = @intFromFloat(b.max.y - b.min.y + up_size),
+                };
+                _ = engine.renderer.drawRect(rect) catch {};
+            },
+        }
+    }
+}
+
+// pub fn debug_draw_colliders_with_sdl2_render(it: *ecs.iter_t, positions: []Position, colliders: []Collider) void {
+pub fn debug_draw_colliders_with_sdl2_render(world: *ecs.world_t) void {
+    const engine = Engine.getEngine(world);
+
+    var desc = ecs.query_desc_t{};
+    desc.terms[0] = .{ .id = ecs.id(Position), .inout = .In };
+    desc.terms[1] = .{ .id = ecs.id(Collider), .inout = .In };
+    const ground_q = ecs.query_init(world, &desc) catch unreachable;
+    var q_it = ecs.query_iter(world, ground_q);
+
+    engine.renderer.setColor(SDL.Color{ .r = 255, .g = 0, .b = 0, .a = 255 }) catch {};
+
+    while (ecs.query_next(&q_it)) {
+        const positions = ecs.field(&q_it, Position, 0).?;
+        const colliders = ecs.field(&q_it, Collider, 1).?;
+
+        draw_colliders(positions, colliders, engine, 0);
+    }
+
+    // --- LOOP 2: Draw the Constraints (Dedicated and safe) ---
+    var cons_desc = ecs.query_desc_t{};
+    cons_desc.terms[0] = .{ .id = ecs.id(Position), .inout = .In };
+    cons_desc.terms[1] = .{ .id = ecs.id(components.DistanceConstraint), .inout = .In };
+    cons_desc.terms[2] = .{
+        .id = ecs.id(components.Collider),
+    };
+    const cons_q = ecs.query_init(world, &cons_desc) catch unreachable;
+    var cons_it = ecs.query_iter(world, cons_q);
+
+    while (ecs.query_next(&cons_it)) {
+        const positions = ecs.field(&cons_it, Position, 0).?;
+        const constraints = ecs.field(&cons_it, components.DistanceConstraint, 1).?;
+        const colliders = ecs.field(&cons_it, Collider, 2).?;
+
+        engine.renderer.setColor(SDL.Color{ .r = 255, .g = 0, .b = 255, .a = 255 }) catch {};
+        draw_colliders(positions, colliders, engine, 2);
+
+        engine.renderer.setColor(SDL.Color{ .r = 0, .g = 255, .b = 255, .a = 255 }) catch {};
+        for (0..cons_it.count()) |i| {
+            const p = positions[i];
+            const cons = constraints[i];
+
+            // Look up the target's position directly
+            if (ecs.get(world, cons.target, Position)) |target_p| {
+                _ = engine.renderer.drawLine(@intFromFloat(p.x), @intFromFloat(p.y), @intFromFloat(target_p.x), @intFromFloat(target_p.y)) catch {};
+            }
+        }
+    }
 }
