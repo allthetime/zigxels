@@ -13,3 +13,15 @@ https://en.wikipedia.org/wiki/Metaballs
 https://www.youtube.com/watch?v=qlfh_rv6khY
 https://www.youtube.com/watch?v=sVntwsrjNe4&t=169s
 https://www.youtube.com/watch?v=CdPYlj5uZeI&t=291s
+
+
+Terrain: Currently, the terrain (GroundGrid) is generated as 
+many small entities with colliders.
+Critique: While this works for now, if you want true 
+"Noita-like" destructibility, creating an ECS entity for 
+every 5x5 pixel chunk will likely become a bottleneck. 
+A hybrid approach using a raw grid/bitmask for terrain 
+physics alongside ECS for moving objects would be more 
+performant.
+
+ALSO... QUAD TREE / broadphase implementation
