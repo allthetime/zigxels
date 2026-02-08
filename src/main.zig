@@ -6,6 +6,7 @@ const z2 = @import("zig_c2");
 const engine_mod = @import("engine/core.zig");
 const input_mod = @import("engine/input.zig");
 const pixels_mod = @import("engine/pixels.zig");
+const Effect = @import("engine/effects.zig").Effect;
 const game = @import("game/systems.zig");
 const components = @import("game/components.zig");
 
@@ -49,7 +50,6 @@ pub fn main() !void {
     try setup_game(world, &engine);
 
     var time_ticks = SDL.getTicks64();
-    var cursor_size: f32 = 20.0;
 
     while (!input.quit_requested) {
         const dt = calculateDeltaTime(&time_ticks);
@@ -57,44 +57,37 @@ pub fn main() !void {
 
         input.update();
 
-        // if (input.right_stick_x != 0.0 or input.right_stick_y != 0.0) {
-        //     if (ecs.singleton_get(world, PlayerContainer)) |pc| {
-        //         if (ecs.get(world, pc.entity, Position)) |pos| {
-        //             const dx = input.right_stick_x;
-        //             const dy = input.right_stick_y;
-        //             // Calculate intersection with screen bounds (0,0) -> (WIDTH, HEIGHT)
-        //             // Ray: pos + t * (dx, dy)
-        //             // We want smallest positive t where ray hits bounds.
-        //             const tx = if (dx > 0) (@as(f32, @floatFromInt(WIDTH)) - pos.x) / dx else if (dx < 0) -pos.x / dx else std.math.floatMax(f32);
-        //             const ty = if (dy > 0) (@as(f32, @floatFromInt(HEIGHT)) - pos.y) / dy else if (dy < 0) -pos.y / dy else std.math.floatMax(f32);
-        //             const t = @min(tx, ty);
-        //             input.mouse_x = @intFromFloat(pos.x + dx * t);
-        //             input.mouse_y = @intFromFloat(pos.y + dy * t);
-        //         }
-        //     }
-        // }
+        // Remap mouse from window space to logical pixel buffer space.
+        // We keep raw coords in `input` (so next frame's update() works correctly)
+        // and only pass remapped coords to the ECS singleton.
+        const logical = engine.windowToLogical(input.mouse_x, input.mouse_y);
+        var ecs_input = input;
+        ecs_input.mouse_x = logical.x;
+        ecs_input.mouse_y = logical.y;
 
-        _ = ecs.singleton_set(world, input_mod.InputState, input);
-
-        _ = ecs.singleton_set(world, input_mod.InputState, input);
+        _ = ecs.singleton_set(world, input_mod.InputState, ecs_input);
 
         engine.restoreBackground();
         _ = ecs.progress(world, dt);
-        try engine.updateTexture();
 
-        // incase systems have altered input state
+        // incase systems have altered input state (e.g. right stick override)
         if (ecs.singleton_get(world, input_mod.InputState)) |s| {
-            input = s.*;
+            ecs_input = s.*;
         }
 
-        const cursorSize = updateCursorSize(input.is_pressing, &cursor_size);
-        try renderMouseCursor(engine.renderer, &input, cursorSize);
+        // Cursor — draw into pixel buffer using logical coords
+        const cursor_color = pixels_mod.packColor(255, 0, 0, 255);
+        pixels_mod.drawCursor(&engine, ecs_input.mouse_x, ecs_input.mouse_y, 10, cursor_color);
 
+        // Debug collider overlay — draw into pixel buffer before GL upload
         if (input.debug_mode) game.debug_draw_colliders_with_sdl2_render(world);
+
+        // Upload pixel + effect buffers to GPU and render via shader
+        engine.renderFrame(dt);
 
         watch_for_reset_and_do_it(&input, reset_game, world, &engine);
 
-        engine.renderer.present();
+        engine.present();
     }
 }
 
@@ -136,28 +129,6 @@ fn calculateDeltaTime(last_time: *u64) f32 {
     return @min(dt, 1.0 / 60.0); // Max 60 FPS equivalent
 }
 
-fn updateCursorSize(pressing: bool, current: *f32) i32 {
-    const target: f32 = if (pressing) 5 else 10;
-    const delta = lerp_delta(current.*, target, 0.1);
-    current.* += delta;
-    return @as(i32, @intFromFloat(current.*));
-}
-
-fn lerp_delta(current: f32, target: f32, time: f32) f32 {
-    return (target - current) * time;
-}
-
-fn renderMouseCursor(renderer: SDL.Renderer, input: *input_mod.InputState, size: i32) !void {
-    try renderer.setDrawBlendMode(.blend);
-    try renderer.setColorRGBA(0xff, 0x00, 0x00, 0xAA);
-    try renderer.fillRect(.{
-        .x = input.mouse_x - @divTrunc(size, 2),
-        .y = input.mouse_y - @divTrunc(size, 2),
-        .width = size,
-        .height = size,
-    });
-}
-
 pub fn setup_game(world: *ecs.world_t, engine: *engine_mod.Engine) !void {
     register_components(world);
     register_systems(world);
@@ -179,11 +150,15 @@ fn register_components(world: *ecs.world_t) void {
     ecs.TAG(world, Player);
     ecs.TAG(world, Ground);
     ecs.TAG(world, Destroyable);
+    ecs.TAG(world, components.EffectZone);
 
     ecs.COMPONENT(world, input_mod.InputState);
     ecs.COMPONENT(world, PhysicsState);
     ecs.COMPONENT(world, BulletsGroup);
     ecs.COMPONENT(world, PlayerContainer);
+
+    // effects
+    ecs.COMPONENT(world, Effect);
 
     // ik
     ecs.COMPONENT(world, components.VerletState);
@@ -266,6 +241,14 @@ fn register_systems(world: *ecs.world_t) void {
     // Single unified pixel render system
     _ = ecs.ADD_SYSTEM(world, "render", ecs.OnStore, game.render_system);
 
+    // Effect zones: invisible entities that stamp effect flags into the effect buffer
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "effect_zones", ecs.OnStore, game.effect_zone_system, &.{
+        .{ .id = ecs.id(components.EffectZone) },
+        .{ .id = ecs.id(Position) },
+        .{ .id = ecs.id(Collider) },
+        .{ .id = ecs.id(Effect) },
+    });
+
     // _ = ecs.ADD_SYSTEM(world, "debug_render", ecs.OnStore, game.debug_draw_colliders_with_sdl2_render);
 }
 
@@ -297,6 +280,7 @@ fn spawn_player_tail(world: *ecs.world_t, player: ecs.entity_t) void {
         // Add PhysicsBody! This allows existing gravity_system and physics_collision_system to work.
         _ = ecs.set(world, seg, PhysicsBody, .{ .restitution = 0.3, .friction = 0.9 });
         _ = ecs.set(world, seg, Renderable, .{ .color = SDL.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } });
+        // _ = ecs.set(world, seg, Effect, Effect.glow_only);
 
         parent = seg;
     }
@@ -354,6 +338,13 @@ fn spawn_level(world: *ecs.world_t, engine: *engine_mod.Engine) void {
     _ = ecs.set(world, floor, Collider, .{ .box = .{ .min = .{ .x = -@as(f32, @floatFromInt(engine.width)) / 2.0, .y = -50.0 }, .max = .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = 50 } } });
     _ = ecs.set(world, floor, Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
     ecs.add(world, floor, Ground);
+
+    // Heat shimmer zone above the main platform (invisible — effect only)
+    const heat_zone = ecs.new_id(world);
+    ecs.add(world, heat_zone, components.EffectZone);
+    _ = ecs.set(world, heat_zone, Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) - 50.0 });
+    _ = ecs.set(world, heat_zone, Collider, .{ .box = .{ .min = .{ .x = -@as(f32, @floatFromInt(engine.width)) / 2.0, .y = -100.0 }, .max = .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = 50 } } });
+    _ = ecs.set(world, heat_zone, Effect, Effect.heat_only);
 }
 
 fn spawnGroundGrid(world: *ecs.world_t, start_x: f32, start_y: f32, width: f32, height: f32) void {

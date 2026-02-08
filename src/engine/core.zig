@@ -1,20 +1,27 @@
 const std = @import("std");
 const SDL = @import("sdl2");
 const ecs = @import("zflecs");
+const gl = @import("gl.zig");
+const ShaderPipeline = @import("shaders.zig").ShaderPipeline;
+pub const Effect = @import("effects.zig").Effect;
 
 pub const Engine = struct {
     gpa: std.heap.GeneralPurposeAllocator(.{}),
     arena: std.heap.ArenaAllocator,
     window: SDL.Window,
-    renderer: SDL.Renderer,
+    gl_context: SDL.gl.Context,
 
     // Pixel layer
     pixel_buffer: []u32,
     background_buffer: []u32,
     sky_buffer: []u32,
-    texture: SDL.Texture,
+    effect_buffer: []u16,
     width: usize,
     height: usize,
+
+    // GL rendering
+    shader_pipeline: ShaderPipeline,
+    time: f32,
 
     pub fn getEngine(world: *ecs.world_t) *Engine {
         return @as(*Engine, @ptrCast(@alignCast(ecs.get_ctx(world).?)));
@@ -34,6 +41,12 @@ pub const Engine = struct {
         });
         _ = try SDL.showCursor(false);
 
+        // Request OpenGL 3.3 Core
+        try SDL.gl.setAttribute(.{ .context_major_version = 3 });
+        try SDL.gl.setAttribute(.{ .context_minor_version = 3 });
+        try SDL.gl.setAttribute(.{ .context_profile_mask = .core });
+        try SDL.gl.setAttribute(.{ .doublebuffer = true });
+
         const window = try SDL.createWindow(
             "PIXELS",
             .{ .centered = {} },
@@ -43,42 +56,46 @@ pub const Engine = struct {
             .{
                 .vis = .shown,
                 .resizable = true,
+                .context = .opengl,
             },
         );
 
-        const renderer = try SDL.createRenderer(
-            window,
-            null,
-            .{
-                .accelerated = true,
-                .present_vsync = true,
-            },
-        );
-        try renderer.setLogicalSize(@intCast(width), @intCast(height));
+        // Create OpenGL context
+        const gl_context = try SDL.gl.createContext(window);
+        try gl_context.makeCurrent(window);
 
-        const texture = try SDL.createTexture(
-            renderer,
-            .rgba8888,
-            .streaming,
-            width,
-            height,
-        );
+        // VSync
+        SDL.gl.setSwapInterval(.vsync) catch {};
 
+        // Load OpenGL function pointers
+        gl.init();
+
+        // Set viewport
+        gl.viewport(0, 0, @intCast(width), @intCast(height));
+
+        // Allocate buffers
         const pixels = try allocator.alloc(u32, width * height);
         const background = try allocator.alloc(u32, width * height);
         const sky = try allocator.alloc(u32, width * height);
+        const effects = try allocator.alloc(u16, width * height);
+        @memset(effects, 0);
+
+        // Init shader pipeline (compiles shaders, creates textures + quad)
+        const shader_pipeline = try ShaderPipeline.init(width, height);
 
         return Engine{
             .gpa = gpa,
             .arena = std.heap.ArenaAllocator.init(allocator),
             .window = window,
-            .renderer = renderer,
+            .gl_context = gl_context,
             .pixel_buffer = pixels,
             .background_buffer = background,
             .sky_buffer = sky,
-            .texture = texture,
+            .effect_buffer = effects,
             .width = width,
             .height = height,
+            .shader_pipeline = shader_pipeline,
+            .time = 0.0,
         };
     }
 
@@ -88,20 +105,35 @@ pub const Engine = struct {
 
     pub fn restoreBackground(self: *Engine) void {
         @memcpy(self.pixel_buffer, self.background_buffer);
+        @memset(self.effect_buffer, 0);
     }
 
-    pub fn updateTexture(self: *Engine) !void {
-        try self.texture.update(
-            std.mem.sliceAsBytes(self.pixel_buffer),
-            self.width * @sizeOf(u32), // Pitch (bytes per row)
-            .{
-                .x = 0,
-                .y = 0,
-                .width = @intCast(self.width),
-                .height = @intCast(self.height),
-            },
-        );
-        try self.renderer.copy(self.texture, null, null);
+    /// Upload pixel + effect buffers to GPU and render via shader pipeline
+    pub fn renderFrame(self: *Engine, dt: f32) void {
+        self.time += dt;
+        // Use actual drawable size so the quad scales to fill the window on resize
+        const drawable = SDL.gl.getDrawableSize(self.window);
+        gl.viewport(0, 0, @intCast(drawable.w), @intCast(drawable.h));
+        self.shader_pipeline.render(self.pixel_buffer, self.effect_buffer, self.time);
+    }
+
+    pub fn present(self: *Engine) void {
+        SDL.gl.swapWindow(self.window);
+    }
+
+    /// Remap window-space mouse coordinates to logical pixel buffer coordinates.
+    /// Accounts for window resize (the pixel buffer is a fixed logical resolution
+    /// stretched to fill the window).
+    pub fn windowToLogical(self: *Engine, wx: i32, wy: i32) struct { x: i32, y: i32 } {
+        const win_size = self.window.getSize();
+        const win_w: f32 = @floatFromInt(win_size.width);
+        const win_h: f32 = @floatFromInt(win_size.height);
+        const log_w: f32 = @floatFromInt(self.width);
+        const log_h: f32 = @floatFromInt(self.height);
+
+        const lx: i32 = @intFromFloat(@as(f32, @floatFromInt(wx)) * log_w / win_w);
+        const ly: i32 = @intFromFloat(@as(f32, @floatFromInt(wy)) * log_h / win_h);
+        return .{ .x = lx, .y = ly };
     }
 
     pub fn deinit(self: *Engine) void {
@@ -109,9 +141,10 @@ pub const Engine = struct {
         allocator.free(self.pixel_buffer);
         allocator.free(self.background_buffer);
         allocator.free(self.sky_buffer);
+        allocator.free(self.effect_buffer);
 
-        self.texture.destroy();
-        self.renderer.destroy();
+        self.shader_pipeline.deinit();
+        self.gl_context.delete();
         self.window.destroy();
         SDL.quit();
 

@@ -34,6 +34,7 @@ pub const Bullet = struct {};
 pub const Player = struct {};
 pub const Ground = struct {};
 pub const Destroyable = struct {};
+pub const EffectZone = struct {}; // tag: invisible entity that stamps effect flags
 pub const PhysicsBody = struct {
     restitution: f32 = 0.9,
     friction: f32 = 0.99,

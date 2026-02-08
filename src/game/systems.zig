@@ -7,6 +7,7 @@ const c2 = @import("zig_c2");
 
 const input_mod = @import("../engine/input.zig");
 const pixel_mod = @import("../engine/pixels.zig");
+const Effect = @import("../engine/effects.zig").Effect;
 
 const Position = components.Position;
 const Velocity = components.Velocity;
@@ -160,8 +161,9 @@ pub fn seek_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocit
 
 pub fn render_system(it: *ecs.iter_t, positions: []Position, colliders: []Collider, renderables: []Renderable) void {
     const engine = Engine.getEngine(it.world);
+    const ents = it.entities();
 
-    for (positions, colliders, renderables) |pos, col, rend| {
+    for (positions, colliders, renderables, 0..) |pos, col, rend, i| {
         // 1. Get World AABB
         const aabb = getWorldAABB(pos, col);
 
@@ -178,8 +180,29 @@ pub fn render_system(it: *ecs.iter_t, positions: []Position, colliders: []Collid
         // 4. Pack Color
         const color = pixel_mod.packColor(rend.color.r, rend.color.g, rend.color.b, rend.color.a);
 
-        // 5. Draw
-        pixel_mod.drawRect(engine, min_x, min_y, w, h, color);
+        // 5. Optional per-entity Effect (defaults to none)
+        const effect = ecs.get(it.world, ents[i], Effect) orelse &Effect.none;
+
+        // 6. Draw
+        pixel_mod.drawRect(engine, min_x, min_y, w, h, color, effect.*);
+    }
+}
+
+/// Stamps effect flags into the effect_buffer for invisible "effect zone" entities.
+/// These entities have Position + Collider + Effect + EffectZone tag, but no Renderable.
+pub fn effect_zone_system(it: *ecs.iter_t, positions: []Position, colliders: []Collider, effects: []Effect) void {
+    const engine = Engine.getEngine(it.world);
+
+    for (positions, colliders, effects) |pos, col, fx| {
+        const aabb = getWorldAABB(pos, col);
+        const min_x = f32_to_i32(aabb.min.x);
+        const min_y = f32_to_i32(aabb.min.y);
+        const max_x = f32_to_i32(aabb.max.x);
+        const max_y = f32_to_i32(aabb.max.y);
+        const w = @as(usize, @intCast(@max(0, max_x - min_x)));
+        const h = @as(usize, @intCast(@max(0, max_y - min_y)));
+
+        pixel_mod.drawEffectOnly(engine, min_x, min_y, w, h, fx, 20);
     }
 }
 
@@ -322,6 +345,8 @@ pub fn shoot_system(it: *ecs.iter_t, guns: []components.Gun, positions: []Positi
         _ = ecs.set(world, bullet, Renderable, .{
             .color = SDL.Color{ .r = 255, .g = 0, .b = 255, .a = 255 },
         });
+
+        // _ = ecs.set(world, bullet, Effect, Effect.none); // NEW: Bullet has special render effect
 
         // Calculate Velocity
         const mouse_x = @as(f32, @floatFromInt(input.mouse_x));
@@ -631,7 +656,7 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
 const ExplosionOptions = struct {
     speed: f32 = 150.0,
     spread: f32 = 1.5,
-    color: u32 = 0x00FF00FF,
+    color: u32 = 0xFF00FF00,
     bounce: f32 = 0.3,
     randomness: f32 = 1.0, // Additional random velocity factor (0.0 = no randomness, 1.0 = full random direction)
 };
@@ -692,6 +717,8 @@ pub fn explosion_system(it: *ecs.iter_t, positions: []Position, velocities: []Ve
 
     _ = velocities; // We don't actually need to update velocity here, but we include it in the query for easy access if we want to add movement to particles later (e.g., gravity or fading out)
 
+    const sprite_size = 5;
+
     for (positions, particles, 0..) |*pos, *p, i| {
         p.lifetime -= dt;
 
@@ -704,12 +731,13 @@ pub fn explosion_system(it: *ecs.iter_t, positions: []Position, velocities: []Ve
         const color = setAlpha(p.color, alpha);
         // Render specially to pixel buffer
         // 1x1 pixel
-        pixel_mod.drawRect(engine, f32_to_i32(pos.x), f32_to_i32(pos.y), 4, 4, color);
+        pixel_mod.drawRect(engine, f32_to_i32(pos.x), f32_to_i32(pos.y), sprite_size, sprite_size, color, Effect.none);
+        // pixel_mod.drawRect(engine, f32_to_i32(pos.x), f32_to_i32(pos.y), sprite_size, sprite_size, color, Effect.chromatic_only);
     }
 }
 
 fn setAlpha(color: u32, alpha: u8) u32 {
-    return (color & 0xFFFFFF00) | (@as(u32, alpha) << 24);
+    return (color & 0x00FFFFFF) | (@as(u32, alpha) << 24);
 }
 
 pub fn right_controller_stick_set_mouse_xy_system(it: *ecs.iter_t) void {
@@ -789,8 +817,8 @@ pub fn constraint_solver_system(it: *ecs.iter_t, positions: []Position, constrai
     }
 }
 
-pub fn drawCircleLines(renderer: SDL.Renderer, cx: f32, cy: f32, radius: f32) void {
-    const segments: usize = 16;
+pub fn drawCirclePixels(engine: *Engine, cx: f32, cy: f32, radius: f32, color: u32) void {
+    const segments: usize = 32;
     const step = (std.math.pi * 2.0) / @as(f32, @floatFromInt(segments));
 
     var i: usize = 0;
@@ -803,11 +831,32 @@ pub fn drawCircleLines(renderer: SDL.Renderer, cx: f32, cy: f32, radius: f32) vo
         const x2 = cx + @cos(theta2) * radius;
         const y2 = cy + @sin(theta2) * radius;
 
-        _ = renderer.drawLine(@intFromFloat(x1), @intFromFloat(y1), @intFromFloat(x2), @intFromFloat(y2)) catch {};
+        drawLinePixels(engine, x1, y1, x2, y2, color);
     }
 }
 
-fn draw_colliders(positions: []Position, colliders: []Collider, engine: *Engine, up_size: f32) void {
+fn drawLinePixels(engine: *Engine, x0: f32, y0: f32, x1: f32, y1: f32, color: u32) void {
+    // Simple Bresenham-style line
+    const dx = @abs(x1 - x0);
+    const dy = @abs(y1 - y0);
+    const steps: usize = @intFromFloat(@max(dx, dy) + 1);
+
+    var s: usize = 0;
+    while (s <= steps) : (s += 1) {
+        const t: f32 = if (steps == 0) 0.0 else @as(f32, @floatFromInt(s)) / @as(f32, @floatFromInt(steps));
+        const px = x0 + (x1 - x0) * t;
+        const py = y0 + (y1 - y0) * t;
+
+        const ix = @as(i32, @intFromFloat(px));
+        const iy = @as(i32, @intFromFloat(py));
+        if (ix >= 0 and iy >= 0 and ix < @as(i32, @intCast(engine.width)) and iy < @as(i32, @intCast(engine.height))) {
+            const idx = @as(usize, @intCast(iy)) * engine.width + @as(usize, @intCast(ix));
+            engine.pixel_buffer[idx] = color;
+        }
+    }
+}
+
+fn draw_colliders(positions: []Position, colliders: []Collider, engine: *Engine, up_size: f32, color: u32) void {
     var i: usize = 0;
     while (i < positions.len) : (i += 1) {
         const p = positions[i];
@@ -817,16 +866,18 @@ fn draw_colliders(positions: []Position, colliders: []Collider, engine: *Engine,
             .circle => |c| {
                 const world_x = p.x + c.p.x;
                 const world_y = p.y + c.p.y;
-                drawCircleLines(engine.renderer, world_x, world_y, c.r + up_size);
+                drawCirclePixels(engine, world_x, world_y, c.r + up_size, color);
             },
             .box => |b| {
-                const rect = SDL.Rectangle{
-                    .x = @intFromFloat(p.x + b.min.x),
-                    .y = @intFromFloat(p.y + b.min.y),
-                    .width = @intFromFloat(b.max.x - b.min.x + up_size),
-                    .height = @intFromFloat(b.max.y - b.min.y + up_size),
-                };
-                _ = engine.renderer.drawRect(rect) catch {};
+                const min_x = p.x + b.min.x;
+                const min_y = p.y + b.min.y;
+                const max_x = p.x + b.max.x + up_size;
+                const max_y = p.y + b.max.y + up_size;
+                // Draw 4 edges
+                drawLinePixels(engine, min_x, min_y, max_x, min_y, color);
+                drawLinePixels(engine, max_x, min_y, max_x, max_y, color);
+                drawLinePixels(engine, max_x, max_y, min_x, max_y, color);
+                drawLinePixels(engine, min_x, max_y, min_x, min_y, color);
             },
         }
     }
@@ -836,19 +887,21 @@ fn draw_colliders(positions: []Position, colliders: []Collider, engine: *Engine,
 pub fn debug_draw_colliders_with_sdl2_render(world: *ecs.world_t) void {
     const engine = Engine.getEngine(world);
 
+    const debug_red = pixel_mod.packColor(255, 0, 0, 255);
+    const debug_magenta = pixel_mod.packColor(255, 0, 255, 255);
+    const debug_cyan = pixel_mod.packColor(0, 255, 255, 255);
+
     var desc = ecs.query_desc_t{};
     desc.terms[0] = .{ .id = ecs.id(Position), .inout = .In };
     desc.terms[1] = .{ .id = ecs.id(Collider), .inout = .In };
     const ground_q = ecs.query_init(world, &desc) catch unreachable;
     var q_it = ecs.query_iter(world, ground_q);
 
-    engine.renderer.setColor(SDL.Color{ .r = 255, .g = 0, .b = 0, .a = 255 }) catch {};
-
     while (ecs.query_next(&q_it)) {
         const positions = ecs.field(&q_it, Position, 0).?;
         const colliders = ecs.field(&q_it, Collider, 1).?;
 
-        draw_colliders(positions, colliders, engine, 0);
+        draw_colliders(positions, colliders, engine, 0, debug_red);
     }
 
     // --- LOOP 2: Draw the Constraints (Dedicated and safe) ---
@@ -866,17 +919,15 @@ pub fn debug_draw_colliders_with_sdl2_render(world: *ecs.world_t) void {
         const constraints = ecs.field(&cons_it, components.DistanceConstraint, 1).?;
         const colliders = ecs.field(&cons_it, Collider, 2).?;
 
-        engine.renderer.setColor(SDL.Color{ .r = 255, .g = 0, .b = 255, .a = 255 }) catch {};
-        draw_colliders(positions, colliders, engine, 2);
+        draw_colliders(positions, colliders, engine, 2, debug_magenta);
 
-        engine.renderer.setColor(SDL.Color{ .r = 0, .g = 255, .b = 255, .a = 255 }) catch {};
         for (0..cons_it.count()) |i| {
             const p = positions[i];
             const cons = constraints[i];
 
             // Look up the target's position directly
             if (ecs.get(world, cons.target, Position)) |target_p| {
-                _ = engine.renderer.drawLine(@intFromFloat(p.x), @intFromFloat(p.y), @intFromFloat(target_p.x), @intFromFloat(target_p.y)) catch {};
+                drawLinePixels(engine, p.x, p.y, target_p.x, target_p.y, debug_cyan);
             }
         }
     }
