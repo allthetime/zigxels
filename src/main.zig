@@ -247,6 +247,14 @@ fn register_systems(world: *ecs.world_t) void {
         .{ .id = ecs.id(C.Velocity) },
         .{ .id = ecs.id(C.Collider) },
         .{ .id = ecs.id(C.PhysicsBody) },
+        .{ .id = ecs.id(C.VerletState), .oper = .Not },
+    });
+
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "verlet_collision", ecs.OnUpdate, game.verlet_collision_system, &.{
+        .{ .id = ecs.id(C.Position) },
+        .{ .id = ecs.id(C.VerletState) },
+        .{ .id = ecs.id(C.Collider) },
+        .{ .id = ecs.id(C.PhysicsBody) },
     });
 
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_clamp", ecs.OnUpdate, game.player_clamp_system, &.{

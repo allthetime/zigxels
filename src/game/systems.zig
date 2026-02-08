@@ -497,6 +497,95 @@ fn resolveBody(pos: *Position, vel: *Velocity, n: c2.Vec2, depth: f32, body: *Ph
     }
 }
 
+fn resolveVerletBody(pos: *Position, n: c2.Vec2, depth: f32, body: *PhysicsBody, vs: *components.VerletState) void {
+    // 1. Un-penetrate (Push out)
+    // Avoid aggressive pushing which can cause snapping to corners
+    const push_x = n.x * (depth + 0.01);
+    const push_y = n.y * (depth + 0.01);
+
+    pos.x -= push_x;
+    pos.y -= push_y;
+
+    // 2. Adjust old_pos to handle friction and restitution
+    var vx = pos.x - vs.old_x;
+    var vy = pos.y - vs.old_y;
+
+    // Check if we are moving INTO the wall
+    const v_dot_n = (vx * n.x) + (vy * n.y);
+
+    if (v_dot_n > 0) {
+        // We are moving INTO the wall (or we were pushed into it)
+        // Reflect velocity?
+
+        // Normal component
+        const vn_x = n.x * v_dot_n;
+        const vn_y = n.y * v_dot_n;
+
+        // Tangent component
+        const vt_x = vx - vn_x;
+        const vt_y = vy - vn_y;
+
+        const friction = body.friction;
+        const restitution = body.restitution;
+
+        // New Velocity
+        var new_vx = (vt_x * friction) - (vn_x * restitution);
+        var new_vy = (vt_y * friction) - (vn_y * restitution);
+
+        // Limit velocity to prevent crazy jitter if squeezed
+        const MAX_VERLET_SPEED: f32 = 20.0; // clamp max movement per frame
+        new_vx = clamp(f32, new_vx, -MAX_VERLET_SPEED, MAX_VERLET_SPEED);
+        new_vy = clamp(f32, new_vy, -MAX_VERLET_SPEED, MAX_VERLET_SPEED);
+
+        vs.old_x = pos.x - new_vx;
+        vs.old_y = pos.y - new_vy;
+    } else {
+        // We are moving AWAY from the wall, but we were overlapping.
+        // This usually happens when hanging off an edge or dragged by a constraint.
+        // We just accepted the push-out (step 1), which naturally kills the normal velocity
+        // effectively making it 0 relative to the wall surface for this frame.
+        //
+        // However, we must ensure old_pos is updated so we don't 'gain' velocity from the push
+        // The push changed pos.x/y. If we leave old_x/y alone, (pos-old) changes, creating fake velocity.
+        // We want to PRESERVE the relative velocity we had, minus the normal component (cancellation).
+
+        // Current implicit velocity relative to old_pos
+        // (This includes the push-out we just did!)
+        // NO wait. vs.old_x is from previous frame. pos.x is NEW pushed position.
+        // So (pos.x - vs.old_x) IS the new velocity.
+
+        // If we do NOTHING, the particle accelerates in the direction of the push.
+        // This is physically correct for a hard collision, BUT in Verlet it adds energy.
+        // We should dampen the component of the velocity that was added by the push.
+
+        // The push added (-push_x, -push_y) to position.
+        // So velocity effectively changed by that amount.
+        // We want to neutralize that velocity addition usually?
+        // Actually, for a solid wall, canceling velocity into the wall is correct.
+
+        // Let's just apply simple friction to the tangential part and kill the normal part.
+        // This stops "sliding" from turning into "launching".
+
+        // Re-calculate local vel based on the NEW compacted position
+        vx = pos.x - vs.old_x;
+        vy = pos.y - vs.old_y;
+
+        const vn_x = n.x * ((vx * n.x) + (vy * n.y));
+        const vn_y = n.y * ((vx * n.x) + (vy * n.y));
+
+        var vt_x = vx - vn_x;
+        var vt_y = vy - vn_y;
+
+        // Apply friction to sliding
+        vt_x *= body.friction;
+        vt_y *= body.friction;
+
+        // Reconstruct old_pos to represent purely tangential velocity (0 normal velocity)
+        vs.old_x = pos.x - vt_x;
+        vs.old_y = pos.y - vt_y;
+    }
+}
+
 pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, colliders: []Collider, physicsBodies: []PhysicsBody) void {
     const world = it.world;
     const phys = ecs.singleton_get(world, components.PhysicsState) orelse return;
@@ -652,6 +741,52 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
     }
     for (0..doomed_bullet_count) |i| {
         ecs.delete(world, doomed_bullets[i]);
+    }
+}
+
+pub fn verlet_collision_system(it: *ecs.iter_t, positions: []Position, verlets: []components.VerletState, colliders: []Collider, physicsBodies: []PhysicsBody) void {
+    const world = it.world;
+    const phys = ecs.singleton_get(world, components.PhysicsState) orelse return;
+
+    var q_it = ecs.query_iter(world, phys.ground_query);
+    while (ecs.query_next(&q_it)) {
+        const g_positions = ecs.field(&q_it, Position, 1).?;
+        const g_colliders = ecs.field(&q_it, Collider, 2).?;
+
+        for (0..q_it.count()) |i| {
+            const gp = g_positions[i];
+            const ground_shape = g_colliders[i].box;
+
+            const ground_aabb = c2.AABB{
+                .min = .{ .x = ground_shape.min.x + gp.x, .y = ground_shape.min.y + gp.y },
+                .max = .{ .x = ground_shape.max.x + gp.x, .y = ground_shape.max.y + gp.y },
+            };
+
+            for (positions, verlets, colliders, physicsBodies) |*pos, *vs, col, *pb| {
+                var m: c2.Manifold = undefined;
+                m.count = 0;
+
+                switch (col) {
+                    .circle => |c| {
+                        const world_circle = c2.Circle{ .p = .{ .x = pos.x + c.p.x, .y = pos.y + c.p.y }, .r = c.r };
+                        c2.circleToAABBManifold(world_circle, ground_aabb, &m);
+                    },
+                    .box => |b| {
+                        const world_aabb = c2.AABB{
+                            .min = .{ .x = b.min.x + pos.x, .y = b.min.y + pos.y },
+                            .max = .{ .x = b.max.x + pos.x, .y = b.max.y + pos.y },
+                        };
+                        c2.aabbToAABBManifold(world_aabb, ground_aabb, &m);
+                    },
+                }
+
+                if (m.count > 0) {
+                    // Only push out if we are moving INTO the wall?
+                    // For verlet, we just resolve penetration.
+                    resolveVerletBody(pos, m.n, m.depths[0], pb, vs);
+                }
+            }
+        }
     }
 }
 
