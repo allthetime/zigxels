@@ -337,10 +337,10 @@ fn spawn_player_tail(world: *ecs.world_t, player: ecs.entity_t) void {
                 .stiffness = 0.5,
             });
 
-            _ = ecs.set_pair(world, seg, ecs.id(C.AttachedTo), first_one, C.AttachedTo, .{
-                .stiffness = 0.1,
-                .dist = segment_dist * segment_count, // Looser connection for the last segment to allow more freedom to reach towards the cursor
-            });
+            // _ = ecs.set_pair(world, seg, ecs.id(C.AttachedTo), first_one, C.AttachedTo, .{
+            //     .stiffness = 0.1,
+            //     .dist = segment_dist * segment_count, // Looser connection for the last segment to allow more freedom to reach towards the cursor
+            // });
         }
 
         parent = seg;

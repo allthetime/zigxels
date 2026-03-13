@@ -25,3 +25,104 @@ physics alongside ECS for moving objects would be more
 performant.
 
 ALSO... QUAD TREE / broadphase implementation
+
+
+
+
+
+
+
+.........
+.........
+need to split up rendered before it gets too big and separate effects from rendering concerns
+.........
+.........
+
+
+Moving the shader logic into your gl.zig (the "crusty" layer) is a smart move. It turns those raw, scary C functions into a clean, "Zig-y" API that you can reuse for any project.
+
+Here is a robust way to set up those helpers. I’ve included an error union return so your main code can use try or catch, making it feel like native Zig code.
+1. Updated gl.zig (The Helpers)
+
+Add these to the bottom of your existing gl.zig.
+Code snippet
+
+const std = @import("std");
+
+pub const ShaderError = error{
+    CompileError,
+    LinkError,
+};
+
+pub fn compileShader(shader_type: GLenum, source: [:0]const u8) !GLuint {
+    const shader = createShader(shader_type);
+    const src_ptr: [*]const GLchar = source.ptr;
+    
+    shaderSource(shader, 1, @ptrCast(&src_ptr), null);
+    compileShader_gl(shader); // Note: renamed the raw GL call to avoid collision
+
+    var success: GLint = 0;
+    getShaderiv(shader, GL_COMPILE_STATUS, &success);
+    if (success == GL_FALSE) {
+        var len: GLint = 0;
+        getShaderiv(shader, GL_INFO_LOG_LENGTH, &len);
+        const buf = try std.heap.page_allocator.alloc(u8, @intCast(len));
+        defer std.heap.page_allocator.free(buf);
+        
+        getShaderInfoLog(shader, len, null, @ptrCast(buf.ptr));
+        std.log.err("Shader Compile Error: {s}", .{buf});
+        deleteShader(shader);
+        return ShaderError.CompileError;
+    }
+    return shader;
+}
+
+pub fn linkProgram(vert: GLuint, frag: GLuint) !GLuint {
+    const prog = createProgram();
+    attachShader(prog, vert);
+    attachShader(prog, frag);
+    linkProgram_gl(prog);
+
+    var success: GLint = 0;
+    getProgramiv(prog, GL_LINK_STATUS, &success);
+    if (success == GL_FALSE) {
+        // ... (Similar error log logic as compileShader) ...
+        deleteProgram(prog);
+        return ShaderError.LinkError;
+    }
+    return prog;
+}
+
+2. How your init looks now
+
+Your SimpleRenderer.zig becomes much more readable. You can now use Zig's defer to clean up the individual shader stages immediately after linking them into the program.
+Code snippet
+
+pub fn init(width: usize, height: usize) !SimpleRenderer {
+    // 1. Compile and Link (using our new helpers)
+    const vert = try gl.compileShader(gl.GL_VERTEX_SHADER, res.vert_source);
+    defer gl.deleteShader(vert); // Clean up the "recipe" once the "meal" is cooked
+    
+    const frag = try gl.compileShader(gl.GL_FRAGMENT_SHADER, res.frag_source);
+    defer gl.deleteShader(frag);
+
+    const program = try gl.linkProgram(vert, frag);
+
+    // 2. VAO/VBO Setup (The GPU "Floor Plan")
+    // ... rest of your code ...
+}
+
+Why defer is your best friend here
+
+In the original code, if the fragment shader failed to compile, the vertex shader would just sit in GPU memory leaked. By using try combined with defer gl.deleteShader(vert), Zig guarantees that if anything fails, the previously created resources are wiped from the GPU automatically.
+A Note on the @embedFile trick
+
+Since you’re moving to separate files, remember that @embedFile provides a []const u8. However, OpenGL functions often expect a null-terminated string ([:0]const u8).
+
+If your .glsl files aren't null-terminated, you can do this in your resources.zig:
+Code snippet
+
+// This adds a null terminator at compile-time
+pub const vert_source = @embedFile("../shaders/passthrough.vert") ++ "\x00";
+
+Now that you have the renderer decoupled, would you like to see how to handle window resizing so your pixel buffer stays crisp if you drag the window corner?

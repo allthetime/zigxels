@@ -47,12 +47,6 @@ pub const DistanceConstraint = struct {
 };
 ```
 
-### C. The Tags
-Used to organize the entities within the ECS pipeline.
-```zig
-pub const VerletEntity = struct {}; // Tag for easy filtering
-```
-
 ## 4. The System Pipeline
 
 The order of execution is critical for stability. The Verlet pipeline typically runs **before** collision resolution but **after** standard input/gameplay logic.
