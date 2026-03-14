@@ -677,8 +677,8 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
                             doomed_ground_count += 1;
 
                             // Spawn explosion particles
-                            const center_x = ground_aabb.min.x + gw / 2.0;
-                            const center_y = ground_aabb.min.y + gh / 2.0;
+                            // const center_x = ground_aabb.min.x + gw / 2.0;
+                            // const center_y = ground_aabb.min.y + gh / 2.0;
                             // const rnd = std.crypto.random;
 
                             // Direction opposite to bullet velocity
@@ -690,34 +690,7 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
                                 dir_y = -vel.y / vel_len;
                             }
 
-                            make_explosion(world, center_x, center_y, dir_x, dir_y, .{});
-                            //     for (0..10) |_| {
-                            //         const e = ecs.new_id(world);
-
-                            //         // Random spread
-                            //         const spread_angle = (rnd.float(f32) - 0.5) * 1.5;
-                            //         const cos_a = std.math.cos(spread_angle);
-                            //         const sin_a = std.math.sin(spread_angle);
-
-                            //         const p_vx = dir_x * cos_a - dir_y * sin_a;
-                            //         const p_vy = dir_x * sin_a + dir_y * cos_a;
-
-                            //         const speed = 100.0 + rnd.float(f32) * 150.0;
-
-                            //         _ = ecs.set(world, e, Position, .{ .x = center_x, .y = center_y });
-                            //         _ = ecs.set(world, e, Velocity, .{ .x = p_vx * speed, .y = p_vy * speed });
-                            //         _ = ecs.set(world, e, Collider, .{
-                            //             .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 1 },
-                            //         });
-                            //         _ = ecs.set(world, e, components.ExplosionParticle, .{
-                            //             .lifetime = 0.3 + rnd.float(f32) * 0.4,
-                            //             .color = 0x00FF00FF,
-                            //         });
-                            //         _ = ecs.set(world, e, PhysicsBody, .{
-                            //             .restitution = 0.3,
-                            //             .friction = 0.8,
-                            //         });
-                            //     }
+                            // make_explosion(world, center_x, center_y, dir_x, dir_y, .{});
                         }
 
                         // Queue Bullet Deletion
