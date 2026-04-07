@@ -52,29 +52,36 @@ pub fn main() !void {
         // Remap mouse from window space to logical pixel buffer space.
         // We keep raw coords in `input` (so next frame's update() works correctly)
         // and only pass remapped coords to the ECS singleton.
-        const logical = engine.windowToLogical(input.mouse_x, input.mouse_y);
-        var ecs_input = input;
-        ecs_input.mouse_x = logical.x;
-        ecs_input.mouse_y = logical.y;
+        // const logical = engine.windowToLogical(input.mouse_x, input.mouse_y);
+
+        const ecs_input = input;
 
         _ = ecs.singleton_set(world, input_mod.InputState, ecs_input);
 
-        const mouseCursor = ecs.lookup(world, "MouseCursor");
-        if (mouseCursor != 0) {
-            _ = ecs.set(world, mouseCursor, C.Position, .{ .x = @floatFromInt(ecs_input.mouse_x), .y = @floatFromInt(ecs_input.mouse_y) });
+        const logical = engine.windowToLogical(input.mouse_x, input.mouse_y);
+        // Only mouse updates AimTarget here; controller stick system updates it during progress
+        if (input.active_input_method != .controller) {
+            _ = ecs.singleton_set(world, C.AimTarget, .{ .x = @floatFromInt(logical.x), .y = @floatFromInt(logical.y) });
         }
+
+        const mouseCursor = ecs.lookup(world, "MouseCursor");
+        // if (mouseCursor != 0) {
+        //     if (ecs_input.active_input_method == .keyboard_mouse or ecs_input.active_input_method == null) {
+        //         _ = ecs.set(world, mouseCursor, C.Position, .{ .x = @floatFromInt(ecs_input.mouse_x), .y = @floatFromInt(ecs_input.mouse_y) });
+        //     }
+        // }
 
         engine.restoreBackground();
         _ = ecs.progress(world, dt);
 
-        // incase systems have altered input state (e.g. right stick override)
-        // if (ecs.singleton_get(world, input_mod.InputState)) |s| {
-        //     ecs_input = s.*;
-        // }
+        const aim = ecs.singleton_get(world, C.AimTarget) orelse &C.AimTarget{ .x = 0.0, .y = 0.0 };
 
-        // Cursor — draw into pixel buffer using logical coords
+        if (mouseCursor != 0) {
+            _ = ecs.set(world, mouseCursor, C.Position, .{ .x = aim.x, .y = aim.y });
+        }
+
         const cursor_color = pixels_mod.packColor(255, 0, 0, 255);
-        pixels_mod.drawCursor(&engine, ecs_input.mouse_x, ecs_input.mouse_y, 10, cursor_color);
+        pixels_mod.drawCursor(&engine, @intFromFloat(aim.x), @intFromFloat(aim.y), 10, cursor_color);
 
         // Debug collider overlay — draw into pixel buffer before GL upload
         if (input.debug_mode) game.debug_draw_colliders_with_sdl2_render(world);
@@ -139,7 +146,7 @@ pub fn setup_game(world: *ecs.world_t, engine: *engine_mod.Engine) !void {
 
 fn register_components(world: *ecs.world_t) void {
     ecs.COMPONENT(world, C.Gun);
-    ecs.COMPONENT(world, C.Target);
+    ecs.COMPONENT(world, C.AimTarget);
     ecs.COMPONENT(world, C.Position);
     ecs.COMPONENT(world, C.Velocity);
     ecs.COMPONENT(world, C.Collider);
@@ -177,8 +184,6 @@ fn register_components(world: *ecs.world_t) void {
 fn register_systems(world: *ecs.world_t) void {
     // 1. Player Controller (Handling Input + Movement + Collision)
 
-    _ = ecs.ADD_SYSTEM(world, "input_capture", ecs.OnUpdate, game.right_controller_stick_set_mouse_xy_system);
-
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_controller", ecs.OnUpdate, game.player_controller_system, &.{
         .{ .id = ecs.id(C.Player) },
         .{ .id = ecs.id(C.Position) },
@@ -186,6 +191,8 @@ fn register_systems(world: *ecs.world_t) void {
         .{ .id = ecs.id(C.Collider) },
         .{ .id = ecs.id(C.RecoilImpulse) },
     });
+
+    _ = ecs.ADD_SYSTEM(world, "input_capture", ecs.OnUpdate, game.right_controller_stick_set_mouse_xy_system);
 
     _ = ecs.ADD_SYSTEM(world, "seek", ecs.OnUpdate, game.seek_system);
 
@@ -350,6 +357,8 @@ fn spawn_player_tail(world: *ecs.world_t, player: ecs.entity_t) void {
 const PLAYER_SIZE = 30.0;
 
 fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) !void {
+    _ = ecs.singleton_set(world, C.AimTarget, .{ .x = 0.0, .y = 0.0 });
+
     const player = ecs.new_entity(world, "Player");
     ecs.add(world, player, C.Player);
     _ = ecs.set(world, player, C.Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 2.0 });

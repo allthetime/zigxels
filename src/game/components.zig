@@ -13,7 +13,7 @@ pub const Collider = union(enum) {
     circle: c2.Circle,
 };
 
-pub const Target = struct { x: f32, y: f32 };
+pub const AimTarget = struct { x: f32, y: f32 };
 
 pub const RecoilImpulse = struct { x: f32 = 0.0 };
 

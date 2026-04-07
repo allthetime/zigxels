@@ -19,6 +19,11 @@ const MouseState = struct {
     is_pressing: bool = false,
 };
 
+const ActiveInputMethod = enum {
+    controller,
+    keyboard_mouse,
+};
+
 pub const InputState = struct {
     mouse_x: i32 = 0,
     mouse_y: i32 = 0,
@@ -30,6 +35,7 @@ pub const InputState = struct {
     right_stick_x: f32 = 0.0,
     right_stick_y: f32 = 0.0,
     debug_mode: bool = false,
+    active_input_method: ?ActiveInputMethod = null,
 
     keyboard_state: DirectionsWithShooting = DirectionsWithShooting{
         .pressed_directions = PressedDirections{},
@@ -53,15 +59,7 @@ pub const InputState = struct {
                         self.controller = SDL.GameController.open(c_which_i32_as_u_31) catch null;
                     }
                 },
-                // .controller_device_added => |c| {
 
-                // pub const SDL_ControllerDeviceEvent = extern struct {
-                //     type: u32,
-                //     timestamp: u32,
-                //     which: i32,
-                // };
-
-                // },
                 .controller_device_removed => |_| {
                     if (self.controller) |ctrl| {
                         ctrl.close();
@@ -69,7 +67,6 @@ pub const InputState = struct {
                     }
                 },
                 .controller_button_down, .controller_button_up => |c| {
-                    // std.log.debug("Controller button event: {any}", .{c});
                     const is_pressed = c.button_state == .pressed;
                     switch (c.button) {
                         .dpad_up => self.dpad_state.pressed_directions.up = is_pressed,
@@ -92,6 +89,7 @@ pub const InputState = struct {
                     }
                 },
                 .controller_axis_motion => |c| {
+                    self.active_input_method = .controller;
                     const deadzone = 8000;
                     switch (c.axis) {
                         .left_x => {
@@ -120,8 +118,13 @@ pub const InputState = struct {
                     }
                 },
                 .mouse_motion => |m| {
-                    self.mouse_x = m.x;
-                    self.mouse_y = m.y;
+                    std.debug.print("mouse_motion: x={} y={}\n", .{ m.x, m.y });
+                    const new_movement = m.x != self.mouse_x or m.y != self.mouse_y;
+                    self.active_input_method = .keyboard_mouse;
+                    if (new_movement) {
+                        self.mouse_x = m.x;
+                        self.mouse_y = m.y;
+                    }
                 },
                 .mouse_button_down => |m| {
                     _ = m;

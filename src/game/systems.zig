@@ -13,7 +13,7 @@ const Effect = @import("../engine/effects.zig").Effect;
 
 const Position = components.Position;
 const Velocity = components.Velocity;
-const Target = components.Target;
+const AimTarget = components.AimTarget;
 const Renderable = components.Renderable;
 const Collider = components.Collider;
 const Ground = components.Ground;
@@ -138,7 +138,7 @@ pub fn bullet_cleanup_system(it: *ecs.iter_t, positions: []Position) void {
     }
 }
 
-pub fn seek_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, targets: []Target) void {
+pub fn seek_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, targets: []AimTarget) void {
     _ = it;
     _ = positions;
     _ = velocities;
@@ -351,10 +351,9 @@ pub fn shoot_system(it: *ecs.iter_t, guns: []components.Gun, positions: []Positi
         // _ = ecs.set(world, bullet, Effect, Effect.none); // NEW: Bullet has special render effect
 
         // Calculate Velocity
-        const mouse_x = @as(f32, @floatFromInt(input.mouse_x));
-        const mouse_y = @as(f32, @floatFromInt(input.mouse_y));
-        const dx = mouse_x - pos.x;
-        const dy = mouse_y - pos.y;
+        const aim = ecs.singleton_get(world, components.AimTarget) orelse return;
+        const dx = aim.x - pos.x;
+        const dy = aim.y - pos.y;
         const dist = @sqrt(dx * dx + dy * dy);
 
         if (dist > 0) {
@@ -392,72 +391,44 @@ pub fn shoot_system(it: *ecs.iter_t, guns: []components.Gun, positions: []Positi
 
 pub fn gun_aim_system(it: *ecs.iter_t, gun_positions: []Position) void {
     const world = it.world;
-    const input = ecs.singleton_get(world, input_mod.InputState) orelse return;
+    const aim = ecs.singleton_get(world, components.AimTarget) orelse return;
     const phys = ecs.singleton_get(world, components.PhysicsState);
-
-    // 1. Get the player entity ID from the singleton
     const player_container = ecs.singleton_get(world, components.PlayerContainer) orelse return;
-    const player_entity = player_container.entity;
-
-    // 2. Get the player's position directly
-    const player_pos = ecs.get(world, player_entity, Position) orelse return;
-
-    const mouse_x = @as(f32, @floatFromInt(input.mouse_x));
-    const mouse_y = @as(f32, @floatFromInt(input.mouse_y));
+    const player_pos = ecs.get(world, player_container.entity, Position) orelse return;
 
     const GUN_RADIUS: f32 = 40.0;
 
     for (gun_positions) |*gpos| {
-        const dx: f32 = mouse_x - player_pos.x;
-        const dy: f32 = mouse_y - player_pos.y;
+        const dx: f32 = aim.x - player_pos.x;
+        const dy: f32 = aim.y - player_pos.y;
         const dist: f32 = @sqrt(dx * dx + dy * dy);
 
-        // Calculate desired distance (clamped to radius)
-        var aim_dist = dist;
-        if (aim_dist > GUN_RADIUS) aim_dist = GUN_RADIUS;
-
-        // Default to aiming at the target distance
+        const aim_dist = @min(dist, GUN_RADIUS);
         var final_dist = aim_dist;
 
         if (dist > 0.001 and phys != null) {
-            // Normalized Direction
             const nx = dx / dist;
             const ny = dy / dist;
-
-            // Ray from Player Center towards Mouse
             const ray = c2.Ray{
                 .p = c2.Vec2{ .x = player_pos.x, .y = player_pos.y },
                 .d = c2.Vec2{ .x = nx, .y = ny },
-                .t = aim_dist, // Only check as far as the gun reaches
+                .t = aim_dist,
             };
-
-            // Check against all Ground objects
             var q_it = ecs.query_iter(world, phys.?.ground_query);
             while (ecs.query_next(&q_it)) {
                 const g_positions = ecs.field(&q_it, Position, 1).?;
                 const g_colliders = ecs.field(&q_it, Collider, 2).?;
-
                 for (0..q_it.count()) |i| {
-                    const gp = g_positions[i];
-                    // Get the world AABB for this ground piece
-                    const ground_aabb = getWorldAABB(gp, g_colliders[i]);
-
+                    const ground_aabb = getWorldAABB(g_positions[i], g_colliders[i]);
                     var cast_out: c2.Raycast = undefined;
-                    // Raycast against the AABB
                     if (c2.rayToAABB(ray, ground_aabb, &cast_out)) {
-                        // If we hit something closer, shorten the gun distance
-                        if (cast_out.t < final_dist) {
-                            final_dist = cast_out.t;
-                        }
+                        if (cast_out.t < final_dist) final_dist = cast_out.t;
                     }
                 }
             }
-
-            // Set final position based on shortest distance (clamped by wall or radius)
             gpos.x = player_pos.x + nx * final_dist;
             gpos.y = player_pos.y + ny * final_dist;
         } else {
-            // No direction (mouse on player), default to player center
             gpos.x = player_pos.x;
             gpos.y = player_pos.y;
         }
@@ -851,30 +822,26 @@ fn setAlpha(color: u32, alpha: u8) u32 {
 }
 
 pub fn right_controller_stick_set_mouse_xy_system(it: *ecs.iter_t) void {
-    // _ = it;
     const world = it.world;
-    const input = ecs.singleton_get_mut(world, input_mod.InputState) orelse return;
+    const input = ecs.singleton_get(world, input_mod.InputState) orelse return;
     const engine = Engine.getEngine(world);
 
-    if (input.right_stick_x != 0.0 or input.right_stick_y != 0.0) {
-        if (ecs.singleton_get(world, components.PlayerContainer)) |pc| {
-            if (ecs.get(world, pc.entity, Position)) |pos| {
-                const dx = input.right_stick_x;
-                const dy = input.right_stick_y;
-                // Calculate intersection with screen bounds (0,0) -> (WIDTH, HEIGHT)
-                // Ray: pos + t * (dx, dy)
-                // We want smallest positive t where ray hits bounds.
-                const tx = if (dx > 0) (@as(f32, @floatFromInt(engine.width)) - pos.x) / dx else if (dx < 0) -pos.x / dx else std.math.floatMax(f32);
+    if (input.active_input_method != .controller) return;
+    if (input.right_stick_x == 0.0 and input.right_stick_y == 0.0) return;
 
-                const ty = if (dy > 0) (@as(f32, @floatFromInt(engine.height)) - pos.y) / dy else if (dy < 0) -pos.y / dy else std.math.floatMax(f32);
-                const t = @min(tx, ty);
-
-                input.mouse_x = @intFromFloat(pos.x + dx * t);
-                input.mouse_y = @intFromFloat(pos.y + dy * t);
-            }
+    if (ecs.singleton_get(world, components.PlayerContainer)) |pc| {
+        if (ecs.get(world, pc.entity, Position)) |pos| {
+            const dx = input.right_stick_x;
+            const dy = input.right_stick_y;
+            const tx = if (dx > 0) (@as(f32, @floatFromInt(engine.width)) - pos.x) / dx else if (dx < 0) -pos.x / dx else std.math.floatMax(f32);
+            const ty = if (dy > 0) (@as(f32, @floatFromInt(engine.height)) - pos.y) / dy else if (dy < 0) -pos.y / dy else std.math.floatMax(f32);
+            const t = @min(tx, ty);
+            _ = ecs.singleton_set(world, components.AimTarget, .{
+                .x = pos.x + dx * t,
+                .y = pos.y + dy * t,
+            });
         }
     }
-    _ = ecs.singleton_set(world, input_mod.InputState, input.*);
 }
 
 // IK
