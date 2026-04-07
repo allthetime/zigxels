@@ -89,8 +89,9 @@ pub const InputState = struct {
                     }
                 },
                 .controller_axis_motion => |c| {
-                    self.active_input_method = .controller;
                     const deadzone = 8000;
+                    const respond_to_change = @abs(c.value) > deadzone;
+                    if (respond_to_change) self.active_input_method = .controller;
                     switch (c.axis) {
                         .left_x => {
                             self.stick_state.pressed_directions.right = c.value > deadzone;
@@ -101,14 +102,14 @@ pub const InputState = struct {
                             self.stick_state.pressed_directions.up = c.value < -deadzone;
                         },
                         .right_x => {
-                            if (@abs(c.value) > deadzone) {
+                            if (respond_to_change) {
                                 self.right_stick_x = @as(f32, @floatFromInt(c.value)) / AXIS_MAX;
                             } else {
                                 self.right_stick_x = 0.0;
                             }
                         },
                         .right_y => {
-                            if (@abs(c.value) > deadzone) {
+                            if (respond_to_change) {
                                 self.right_stick_y = @as(f32, @floatFromInt(c.value)) / AXIS_MAX;
                             } else {
                                 self.right_stick_y = 0.0;
@@ -118,13 +119,9 @@ pub const InputState = struct {
                     }
                 },
                 .mouse_motion => |m| {
-                    std.debug.print("mouse_motion: x={} y={}\n", .{ m.x, m.y });
-                    const new_movement = m.x != self.mouse_x or m.y != self.mouse_y;
                     self.active_input_method = .keyboard_mouse;
-                    if (new_movement) {
-                        self.mouse_x = m.x;
-                        self.mouse_y = m.y;
-                    }
+                    self.mouse_x = m.x;
+                    self.mouse_y = m.y;
                 },
                 .mouse_button_down => |m| {
                     _ = m;

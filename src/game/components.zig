@@ -36,7 +36,9 @@ pub const Ground = struct {};
 pub const Destroyable = struct {};
 pub const EffectZone = struct {}; // tag: invisible entity that stamps effect flags
 pub const PhysicsBody = struct {
+    /// Restitution (bounciness) of the physics body
     restitution: f32 = 0.9,
+    /// Friction of the physics body
     friction: f32 = 0.99,
 };
 

@@ -303,7 +303,7 @@ fn spawn_player_tail(world: *ecs.world_t, player: ecs.entity_t) void {
     const segment_dist = 10.0;
 
     const p_pos = ecs.get(world, player, C.Position).?;
-    const friction_base = 0.7;
+    const friction_base = 0.86;
 
     // const engine = engine_mod.Engine.getEngine(world);
 
@@ -334,12 +334,13 @@ fn spawn_player_tail(world: *ecs.world_t, player: ecs.entity_t) void {
         _ = ecs.set(world, seg, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 3.0 } });
 
         // Add PhysicsBody! This allows existing gravity_system and physics_collision_system to work.
-        _ = ecs.set(world, seg, C.PhysicsBody, .{ .restitution = 0.3, .friction = 0.9 });
+        // _ = ecs.set(world, seg, C.PhysicsBody, .{ .restitution = 0.0, .friction = 0.5 });
         _ = ecs.set(world, seg, C.Renderable, .{ .color = SDL.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } });
         // _ = ecs.set(world, seg, Effect, Effect.glow_only);
 
         if (last_one) {
             // _ = ecs.set(world, seg, C.TendencyTowards, .{ .target = mouseCursor, .strength = 1.0 });
+            _ = ecs.set(world, seg, C.PhysicsBody, .{ .restitution = 0.0, .friction = 0.5 });
             _ = ecs.set_pair(world, seg, ecs.id(C.ReachTowards), mouseCursor, C.ReachTowards, .{
                 .stiffness = 0.5,
             });

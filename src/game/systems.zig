@@ -1086,8 +1086,10 @@ pub fn attachment_solver_system(it: *ecs.iter_t) void {
     const constraints = ecs.field(it, components.AttachedTo, 0).?;
     const positions = ecs.field(it, components.Position, 1).?;
 
+    const solver_iterations = 24;
+
     // 3. Relaxation Loop
-    for (0..8) |_| {
+    for (0..solver_iterations) |_| {
         for (0..it.count()) |i| {
             const data = constraints[i];
             const child_pos = &positions[i];
