@@ -117,6 +117,7 @@ pub const Engine = struct {
         self.shader_pipeline.render(self.pixel_buffer, self.effect_buffer, self.time);
     }
 
+    /// Swap the OpenGL backbuffer to the front for display
     pub fn present(self: *Engine) void {
         SDL.gl.swapWindow(self.window);
     }

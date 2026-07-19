@@ -264,6 +264,19 @@ fn register_systems(world: *ecs.world_t) void {
         .{ .id = ecs.id(C.PhysicsBody) },
     });
 
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "verlet_self_collision", ecs.OnUpdate, game.verlet_self_collision_system, &.{
+        .{ .id = ecs.id(C.Position) },
+        .{ .id = ecs.id(C.VerletState) },
+        .{ .id = ecs.id(C.Collider) },
+    });
+
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "verlet_bullet_collision", ecs.OnUpdate, game.verlet_bullet_collision_system, &.{
+        .{ .id = ecs.id(C.Position) },
+        .{ .id = ecs.id(C.Velocity) },
+        .{ .id = ecs.id(C.Collider) },
+        .{ .id = ecs.id(C.Bullet) },
+    });
+
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_clamp", ecs.OnUpdate, game.player_clamp_system, &.{
         .{ .id = ecs.id(C.Player) },
     });
@@ -274,7 +287,6 @@ fn register_systems(world: *ecs.world_t) void {
 
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "explosion", ecs.OnUpdate, game.explosion_system, &.{
         .{ .id = ecs.id(C.Position) },
-        .{ .id = ecs.id(C.Velocity) },
         .{ .id = ecs.id(C.ExplosionParticle) },
     });
 
@@ -298,6 +310,7 @@ fn register_systems(world: *ecs.world_t) void {
 }
 
 fn spawn_player_tail(world: *ecs.world_t, player: ecs.entity_t) void {
+    // updated every loop to walk down the chain
     var parent = player;
     const segment_count = 5;
     const segment_dist = 10.0;
@@ -336,7 +349,7 @@ fn spawn_player_tail(world: *ecs.world_t, player: ecs.entity_t) void {
         // Add PhysicsBody! This allows existing gravity_system and physics_collision_system to work.
         // _ = ecs.set(world, seg, C.PhysicsBody, .{ .restitution = 0.0, .friction = 0.5 });
         _ = ecs.set(world, seg, C.Renderable, .{ .color = SDL.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } });
-        // _ = ecs.set(world, seg, Effect, Effect.glow_only);
+        _ = ecs.set(world, seg, Effect, Effect.glow_only);
 
         if (last_one) {
             // _ = ecs.set(world, seg, C.TendencyTowards, .{ .target = mouseCursor, .strength = 1.0 });
@@ -382,14 +395,39 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) !void
     _ = ecs.singleton_set(world, C.GroundGroup, .{ .entity = ground_group });
     spawn_level(world, engine);
 
+    // --- Spawn some Jelly Blobs to fall from the sky ---
+    const center_x = @as(f32, @floatFromInt(engine.width)) / 2.0;
+
+    // Spawn 1: Slightly to the left, smaller
+    // spawn_jelly_blob(world, center_x - 100.0, 100.0, 35.0, 12);
+
+    // Spawn 2: Perfectly centered, medium
+    // spawn_jelly_blob(world, center_x, 50.0, 30.0, 12);
+
+    // Spawn 3: Slightly to the right, large
+    // spawn_jelly_blob(world, center_x + 120.0, 150.0, 120.0, 10);
+
+    for (0..5) |i| {
+        spawn_jelly_blob(world, center_x + (@as(f32, @floatFromInt(i)) * 50.0) - 100.0, 100.0, 80.0, 13);
+    }
+
     // Cache the Ground Query for Physics Systems
     var desc = ecs.query_desc_t{};
     desc.terms[0] = .{ .id = ecs.id(C.Ground) };
     desc.terms[1] = .{ .id = ecs.id(C.Position), .inout = .In };
     desc.terms[2] = .{ .id = ecs.id(C.Collider), .inout = .In };
-    // desc.terms[3] = .{ .id = ecs.id(components.ExplosionParticle), .oper = .Not };
+    desc.terms[3] = .{ .id = ecs.id(C.ExplosionParticle), .oper = .Not };
     const ground_q = ecs.query_init(world, &desc) catch unreachable;
-    _ = ecs.singleton_set(world, C.PhysicsState, .{ .ground_query = ground_q });
+
+    //Cache the IK
+    var v_desc = ecs.query_desc_t{};
+    v_desc.terms[0] = .{ .id = ecs.id(C.Position), .inout = .InOut };
+    v_desc.terms[1] = .{ .id = ecs.id(C.VerletState), .inout = .InOut };
+    v_desc.terms[2] = .{ .id = ecs.id(C.Collider), .inout = .In };
+    v_desc.terms[3] = .{ .id = ecs.id(C.PhysicsBody), .inout = .In };
+    const verlet_query = ecs.query_init(world, &v_desc) catch unreachable;
+
+    _ = ecs.singleton_set(world, C.PhysicsState, .{ .ground_query = ground_q, .verlet_query = verlet_query });
 
     // all bullets group
     const bullets_group = ecs.new_entity(world, "Bullets");
@@ -415,29 +453,45 @@ fn offsetDimensionsToAABB(offset: OffsetDimensions) z2.AABB {
 fn spawn_level(world: *ecs.world_t, engine: *engine_mod.Engine) void {
     const ground_group = ecs.singleton_get(world, C.GroundGroup);
 
-    const cx1 = @as(f32, @floatFromInt(engine.width)) / 2.0;
-    const cy1 = @as(f32, @floatFromInt(engine.height)) / 1.5;
+    const w = @as(f32, @floatFromInt(engine.width));
+    const h = @as(f32, @floatFromInt(engine.height));
+    const wall_thickness_half = 50.0; // Half-width for AABB
+
+    // Left Wall
+    const left_wall = ecs.new_entity(world, "LeftWall");
+    _ = ecs.set(world, left_wall, C.Position, .{ .x = -wall_thickness_half, .y = h / 2.0 });
+    _ = ecs.set(world, left_wall, C.Collider, .{ .box = .{ .min = .{ .x = -wall_thickness_half, .y = -h }, .max = .{ .x = wall_thickness_half, .y = h } } });
+    ecs.add(world, left_wall, C.Ground);
+
+    // Right Wall
+    const right_wall = ecs.new_entity(world, "RightWall");
+    _ = ecs.set(world, right_wall, C.Position, .{ .x = w + wall_thickness_half, .y = h / 2.0 });
+    _ = ecs.set(world, right_wall, C.Collider, .{ .box = .{ .min = .{ .x = -wall_thickness_half, .y = -h }, .max = .{ .x = wall_thickness_half, .y = h } } });
+    ecs.add(world, right_wall, C.Ground);
+
+    const cx1 = @as(f32, w) / 2.0;
+    const cy1 = @as(f32, h) / 1.5;
     spawnGroundGrid(world, cx1 - 150, cy1 - 25, 300, 50, ground_group);
 
-    const cx2 = @as(f32, @floatFromInt(engine.width)) / 2.0 - 200;
-    const cy2 = @as(f32, @floatFromInt(engine.height)) / 1.5 - 100;
+    const cx2 = @as(f32, w) / 2.0 - 200;
+    const cy2 = @as(f32, h) / 1.5 - 100;
     spawnGroundGrid(world, cx2 - 100, cy2 - 10, 200, 20, ground_group);
 
-    const cx3 = @as(f32, @floatFromInt(engine.width)) / 2.0 + 100;
-    const cy3 = @as(f32, @floatFromInt(engine.height)) / 1.5 - 60;
+    const cx3 = @as(f32, w) / 2.0 + 100;
+    const cy3 = @as(f32, h) / 1.5 - 60;
     spawnGroundGrid(world, cx3 - 50, cy3 - 10, 100, 20, ground_group);
 
     const floor = ecs.new_entity(world, "Floor");
-    _ = ecs.set(world, floor, C.Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) - 50.0 });
-    _ = ecs.set(world, floor, C.Collider, .{ .box = .{ .min = .{ .x = -@as(f32, @floatFromInt(engine.width)) / 2.0, .y = -50.0 }, .max = .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = 50 } } });
+    _ = ecs.set(world, floor, C.Position, .{ .x = @as(f32, w) / 2.0, .y = @as(f32, h) - 50.0 });
+    _ = ecs.set(world, floor, C.Collider, .{ .box = .{ .min = .{ .x = -@as(f32, w) / 2.0, .y = -50.0 }, .max = .{ .x = @as(f32, w) / 2.0, .y = 50 } } });
     _ = ecs.set(world, floor, C.Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
     ecs.add(world, floor, C.Ground);
 
     // Heat shimmer zone above the main platform (invisible — effect only)
     const heat_zone = ecs.new_entity(world, "Hot Ground Effect Zone");
     ecs.add(world, heat_zone, C.EffectZone);
-    _ = ecs.set(world, heat_zone, C.Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) - 50.0 });
-    _ = ecs.set(world, heat_zone, C.Collider, .{ .box = .{ .min = .{ .x = -@as(f32, @floatFromInt(engine.width)) / 2.0, .y = -100.0 }, .max = .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = 50 } } });
+    _ = ecs.set(world, heat_zone, C.Position, .{ .x = @as(f32, w) / 2.0, .y = @as(f32, h) - 50.0 });
+    _ = ecs.set(world, heat_zone, C.Collider, .{ .box = .{ .min = .{ .x = -@as(f32, w) / 2.0, .y = -100.0 }, .max = .{ .x = @as(f32, w) / 2.0, .y = 50 } } });
     _ = ecs.set(world, heat_zone, Effect, Effect.heat_only);
 
     // const heat_zone_2 = ecs.new_entity(world, "Player HEAT");
@@ -482,6 +536,68 @@ fn spawnGroundGrid(world: *ecs.world_t, start_x: f32, start_y: f32, width: f32, 
             _ = ecs.add(world, e, C.Destroyable);
             ecs.add_pair(world, e, ecs.ChildOf, grid_grouping);
         }
+    }
+}
+
+fn spawn_jelly_blob(world: *ecs.world_t, cx: f32, cy: f32, radius: f32, segments: usize) void {
+    // We need an allocator to temporarily hold our perimeter node IDs so we can link them
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const nodes = allocator.alloc(ecs.entity_t, segments) catch unreachable;
+    // 1. Create the CORE (The structural anchor)
+    const center = ecs.new_id(world);
+    _ = ecs.set(world, center, C.Position, .{ .x = cx, .y = cy });
+    _ = ecs.set(world, center, C.VerletState, .{ .old_x = cx, .old_y = cy, .friction = 0.99 });
+    _ = ecs.set(world, center, C.Velocity, .{ .x = 0, .y = 0 }); // Needed for your integration
+    _ = ecs.set(world, center, C.Renderable, .{ .color = SDL.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
+
+    // We give the center a collider so it doesn't clip through thin walls!
+    _ = ecs.set(world, center, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = radius / 2.0 } });
+    _ = ecs.set(world, center, C.PhysicsBody, .{ .restitution = 0.2, .friction = 0.8 });
+
+    const angle_step = (std.math.pi * 2.0) / @as(f32, @floatFromInt(segments));
+
+    // Law of cosines to find the distance between two neighbor nodes on the perimeter
+    const perimeter_dist = @sqrt((radius * radius) + (radius * radius) - (2.0 * radius * radius * @cos(angle_step)));
+
+    // 2. Create the SKIN (multi-attached perimeter nodes)
+    for (0..segments) |i| {
+        const angle = @as(f32, @floatFromInt(i)) * angle_step;
+        const px = cx + @cos(angle) * radius;
+        const py = cy + @sin(angle) * radius;
+
+        const node = ecs.new_id(world);
+        nodes[i] = node;
+        _ = ecs.set(world, node, C.Position, .{ .x = px, .y = py });
+        _ = ecs.set(world, node, C.VerletState, .{ .old_x = px, .old_y = py, .friction = 0.99 });
+        _ = ecs.set(world, node, C.Velocity, .{ .x = 0, .y = 0 });
+
+        // Perimeter nodes collide with the ground!
+        _ = ecs.set(world, node, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 2.0 } });
+        _ = ecs.set(world, node, C.PhysicsBody, .{ .restitution = 0.1, .friction = 0.9 });
+        _ = ecs.set(world, node, C.Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 255, .a = 255 } });
+
+        // Attachment A: Connect to the Center (The spoke)
+        // Stiffness < 1.0 makes it squishy like jello!
+        _ = ecs.set_pair(world, node, ecs.id(C.AttachedTo), center, C.AttachedTo, .{
+            .dist = radius,
+            .stiffness = 0.3,
+        });
+    }
+
+    // 3. SEW THE SKIN TOGETHER (Attachment B)
+    for (0..segments) |i| {
+        const current = nodes[i];
+        const next = nodes[(i + 1) % segments]; // Wrap back to 0
+
+        // Attachment B: Connect perimeter node i to perimeter node i+1
+        // High stiffness so the surface doesn't easily rip open.
+        _ = ecs.set_pair(world, current, ecs.id(C.AttachedTo), next, C.AttachedTo, .{
+            .dist = perimeter_dist,
+            .stiffness = 1.0,
+        });
     }
 }
 

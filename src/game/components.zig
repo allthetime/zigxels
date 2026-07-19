@@ -59,6 +59,7 @@ pub const PlayerContainer = struct {
 
 pub const PhysicsState = struct {
     ground_query: *ecs.query_t,
+    verlet_query: *ecs.query_t, // Add this!
 };
 
 // IK

@@ -28,6 +28,10 @@ pub const BULLET_SPEED: f32 = 1000.0;
 pub const GRAVITY: f32 = 2500.0;
 pub const JUMP_IMPULSE: f32 = -600.0;
 
+pub const JELLY_REPULSION: f32 = 0.3; // How strongly jellies push each other apart (0.1 = squishy, 1.0 = rigid)
+pub const JELLY_FRICTION: f32 = 0.85; // How quickly sliding objects lose energy
+pub const JELLY_RESTITUTION: f32 = 0.2; // Extra bounce factor when they hit walls/each other
+
 // --- Helper Functions ---
 
 fn clamp(comptime T: type, value: T, min: T, max: T) T {
@@ -64,29 +68,8 @@ pub fn getWorldAABB(pos: Position, collider: Collider) c2.AABB {
 
 /// Helper to check if an AABB collides with ANY Ground entity
 fn checkCollision(world: *ecs.world_t, test_aabb: c2.AABB) bool {
-    // const phys = ecs.singleton_get(world, components.PhysicsState) orelse return false;
-    // var q_it = ecs.query_iter(world, phys.ground_query);
-    // _ = ecs.singleton_set(world, PhysicsState, .{ .ground_query = ground_q });
-
-    // we want to ignore ground with components.ExplosionParticle
-    // this allows us to have temporary "ghost" ground pieces that exist visually but don't block the player, which is useful for explosion effects where we want the debris to fly through the air without causing additional collisions.
-    // By excluding entities with the ExplosionParticle component from collision checks, we can create more dynamic and visually interesting explosions without affecting gameplay mechanics. This also allows us to reuse the same ground entities for both solid terrain and temporary explosion effects, simplifying our entity management.
-    // In the future, we could expand this system to allow for different types of temporary ground effects (e.g., slippery ice that doesn't block but affects movement, or sticky goo that slows down entities) by adding additional components and logic to determine how they interact with the player and other entities.
-    // Note: We check for the ExplosionParticle component on the ground entities during the collision check. If an entity has this component, we simply skip it and don't consider it for collision, allowing the player to pass through it as if it were not there.
-    // This is a common technique in games to create temporary visual effects that don't interfere with gameplay, and it adds an extra layer of polish and immersion to our explosions without complicating our collision logic.
-    // In our current setup, explosion particles are created as separate entities with their own components, so they won't have the Ground tag and thus won't be included in the ground_query. However, if we were to create explosion particles that also have the Ground tag for visual purposes, we would need to ensure they also have a component (like ExplosionParticle) that allows us to exclude them from collision checks, as described above.
-    // This also means that we can have explosion particles that visually appear as part of the ground but don't actually block movement, which can create more dynamic and visually interesting explosions without affecting the player's ability to move through the environment.
-    // Overall, this approach allows us to maintain a clear separation between visual effects and gameplay mechanics, giving us more flexibility in how we design our explosions and their interactions with the player and the environment.
-    // In summary, by excluding entities with the ExplosionParticle component from collision checks, we can create temporary visual effects that enhance the game's aesthetics without interfering with gameplay, allowing for more dynamic and immersive explosions while keeping our collision logic straightforward and efficient.
-    // In our current implementation, we simply don't add the ExplosionParticle component to ground entities, so they won't be included in the ground_query at all. However, if we wanted to have some ground entities that also serve as explosion particles for visual purposes, we could add the ExplosionParticle component to those entities and then modify our collision check to skip any entities that have that component, ensuring they don't interfere with player movement while still providing the desired visual effect.
-
-    var desc = ecs.query_desc_t{};
-    desc.terms[0] = .{ .id = ecs.id(Ground) };
-    desc.terms[1] = .{ .id = ecs.id(Position), .inout = .In };
-    desc.terms[2] = .{ .id = ecs.id(Collider), .inout = .In };
-    desc.terms[3] = .{ .id = ecs.id(components.ExplosionParticle), .oper = .Not };
-    const ground_q = ecs.query_init(world, &desc) catch unreachable;
-    var q_it = ecs.query_iter(world, ground_q);
+    const phys = ecs.singleton_get(world, components.PhysicsState) orelse return false;
+    var q_it = ecs.query_iter(world, phys.ground_query);
 
     while (ecs.query_next(&q_it)) {
         const g_positions = ecs.field(&q_it, Position, 1).?;
@@ -138,27 +121,8 @@ pub fn bullet_cleanup_system(it: *ecs.iter_t, positions: []Position) void {
     }
 }
 
-pub fn seek_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, targets: []AimTarget) void {
+pub fn seek_system(it: *ecs.iter_t) void {
     _ = it;
-    _ = positions;
-    _ = velocities;
-    _ = targets;
-    // for (positions, velocities, targets) |pos, *vel, target| {
-    //     const p = c2.Vec2{ .x = pos.x, .y = pos.y };
-    //     const t = c2.Vec2{ .x = target.x, .y = target.y };
-    //     const diff = t.sub(p);
-    //     const dist = diff.len();
-
-    //     // If we are further than 2 pixels away, move towards target
-    //     if (dist > 2.0) {
-    //         const v = diff.norm().mul(BULLET_SPEED);
-    //         vel.x = v.x;
-    //         vel.y = v.y;
-    //     } else {
-    //         vel.x = 0;
-    //         vel.y = 0;
-    //     }
-    // }
 }
 
 pub fn render_system(it: *ecs.iter_t, positions: []Position, colliders: []Collider, renderables: []Renderable) void {
@@ -646,22 +610,6 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
 
                             doomed_ground[doomed_ground_count] = ground_entity;
                             doomed_ground_count += 1;
-
-                            // Spawn explosion particles
-                            // const center_x = ground_aabb.min.x + gw / 2.0;
-                            // const center_y = ground_aabb.min.y + gh / 2.0;
-                            // const rnd = std.crypto.random;
-
-                            // Direction opposite to bullet velocity
-                            const vel_len = std.math.sqrt(vel.x * vel.x + vel.y * vel.y);
-                            var dir_x: f32 = 0;
-                            var dir_y: f32 = 0;
-                            if (vel_len > 0) {
-                                dir_x = -vel.x / vel_len;
-                                dir_y = -vel.y / vel_len;
-                            }
-
-                            // make_explosion(world, center_x, center_y, dir_x, dir_y, .{});
                         }
 
                         // Queue Bullet Deletion
@@ -732,6 +680,184 @@ pub fn verlet_collision_system(it: *ecs.iter_t, positions: []Position, verlets: 
             }
         }
     }
+
+    if (ecs.singleton_get(world, components.PlayerContainer)) |pc| {
+        if (ecs.get(world, pc.entity, Position)) |p_pos| {
+            if (ecs.get(world, pc.entity, Collider)) |p_col| {
+                const player_aabb = getWorldAABB(p_pos.*, p_col.*);
+
+                for (positions, verlets, colliders, physicsBodies) |*pos, *vs, col, *pb| {
+                    var m: c2.Manifold = undefined;
+                    m.count = 0;
+
+                    // Same check we did against ground!
+                    switch (col) {
+                        .circle => |c| {
+                            const world_circle = c2.Circle{ .p = .{ .x = pos.x + c.p.x, .y = pos.y + c.p.y }, .r = c.r };
+                            c2.circleToAABBManifold(world_circle, player_aabb, &m);
+                        },
+                        .box => |b| {
+                            const world_aabb = c2.AABB{
+                                .min = .{ .x = b.min.x + pos.x, .y = b.min.y + pos.y },
+                                .max = .{ .x = b.max.x + pos.x, .y = b.max.y + pos.y },
+                            };
+                            c2.aabbToAABBManifold(world_aabb, player_aabb, &m);
+                        },
+                    }
+
+                    if (m.count > 0) {
+                        // The particle touches the player! Push it away.
+                        resolveVerletBody(pos, m.n, m.depths[0], pb, vs);
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn verlet_self_collision_system(it: *ecs.iter_t, positions: []Position, verlets: []components.VerletState, colliders: []Collider) void {
+    const world = it.world;
+    const phys = ecs.singleton_get(world, components.PhysicsState) orelse return;
+    const ents = it.entities();
+
+    // Query all verlets in the world to compare against this current iteration chunk
+    var q_it = ecs.query_iter(world, phys.verlet_query);
+
+    _ = verlets;
+
+    while (ecs.query_next(&q_it)) {
+        const other_positions = ecs.field(&q_it, Position, 0).?;
+        const other_colliders = ecs.field(&q_it, Collider, 2).?;
+        const other_ents = q_it.entities();
+
+        for (positions, colliders, 0..) |*p1, c1, i| {
+            const e1 = ents[i];
+
+            // Get the parent entity this node is attached to (to prevent inner-jelly collisions)
+            const parent1 = ecs.get_target(world, e1, ecs.id(components.AttachedTo), 0);
+
+            for (other_positions, other_colliders, 0..) |*p2, c_2, j| {
+                const e2 = other_ents[j];
+
+                // 1. Skip self, and skip checking pairs twice (e1 vs e2, then e2 vs e1)
+                if (e1 >= e2) continue;
+
+                // 2. IMPORTANT: Do not collide parts of the SAME jelly together!
+                const parent2 = ecs.get_target(world, e2, ecs.id(components.AttachedTo), 0);
+                if (parent1 != 0 and parent1 == parent2) continue;
+
+                // 3. Resolve Circle vs Circle collision
+                if (c1 == .circle and c_2 == .circle) {
+                    const r1 = c1.circle.r;
+                    const r2 = c_2.circle.r;
+
+                    const dx = (p2.x + c_2.circle.p.x) - (p1.x + c1.circle.p.x);
+                    const dy = (p2.y + c_2.circle.p.y) - (p1.y + c1.circle.p.y);
+                    const dist_sq = (dx * dx) + (dy * dy);
+                    const min_dist = r1 + r2;
+
+                    // If they are overlapping
+                    if (dist_sq < min_dist * min_dist and dist_sq > 0.0001) {
+                        const dist = @sqrt(dist_sq);
+                        const overlap = min_dist - dist;
+
+                        // Normal pointing from p1 to p2
+                        const nx = dx / dist;
+                        const ny = dy / dist;
+
+                        // Push them apart symmetrically using our tunable Repulsion constant
+                        const push_x = nx * overlap * 0.5 * JELLY_REPULSION;
+                        const push_y = ny * overlap * 0.5 * JELLY_REPULSION;
+
+                        // Moving 'pos' without moving 'old' naturally boosts velocity next frame!
+                        p1.x -= push_x;
+                        p1.y -= push_y;
+                        p2.x += push_x;
+                        p2.y += push_y;
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn verlet_bullet_collision_system(it: *ecs.iter_t, bullet_positions: []Position, bullet_velocities: []Velocity, bullet_colliders: []Collider) void {
+    const world = it.world;
+    const phys = ecs.singleton_get(world, components.PhysicsState) orelse return;
+
+    // We use phys.verlet_query to get all the jelly chunks
+    var q_it = ecs.query_iter(world, phys.verlet_query);
+
+    while (ecs.query_next(&q_it)) {
+        const v_positions = ecs.field(&q_it, Position, 0).?;
+        const v_states = ecs.field(&q_it, components.VerletState, 1).?;
+        const v_colliders = ecs.field(&q_it, Collider, 2).?;
+        // const pb = ecs.field(&q_it, PhysicsBody, 4).?;  // Not strictly needed since bullets don't care about the verlet's physical properties besides position/radius
+
+        for (v_positions, v_states, v_colliders, 0..) |*v_pos, *vs, v_col, v_idx| {
+            _ = v_idx;
+
+            for (bullet_positions, bullet_velocities, bullet_colliders, 0..) |*b_pos, *b_vel, b_col, b_idx| {
+                _ = b_idx;
+                var m: c2.Manifold = undefined;
+                m.count = 0;
+
+                // Bullet is A, Verlet is B
+                // A = Circle, B = Circle  (in most cases)
+                switch (v_col) {
+                    .circle => |v_c| {
+                        switch (b_col) {
+                            .circle => |b_c| {
+                                const circle_a = c2.Circle{ .p = .{ .x = b_pos.x + b_c.p.x, .y = b_pos.y + b_c.p.y }, .r = b_c.r };
+                                const circle_b = c2.Circle{ .p = .{ .x = v_pos.x + v_c.p.x, .y = v_pos.y + v_c.p.y }, .r = v_c.r };
+                                c2.circleToCircleManifold(circle_a, circle_b, &m);
+                            },
+                            .box => |b_b| {
+                                const world_b_aabb = c2.AABB{
+                                    .min = .{ .x = b_b.min.x + b_pos.x, .y = b_b.min.y + b_pos.y },
+                                    .max = .{ .x = b_b.max.x + b_pos.x, .y = b_b.max.y + b_pos.y },
+                                };
+                                const world_v_circle = c2.Circle{ .p = .{ .x = v_pos.x + v_c.p.x, .y = v_pos.y + v_c.p.y }, .r = v_c.r };
+                                c2.circleToAABBManifold(world_v_circle, world_b_aabb, &m); // Might need inverse
+                            },
+                        }
+                    },
+                    .box => |v_b| {
+                        _ = v_b;
+                        // Handle box verlets if you make them
+                    },
+                }
+
+                if (m.count > 0) {
+                    // Interaction:
+                    // 1. Deflect bullet
+                    // 2. Transfer momentum to Verlet old_pos to make it flinch
+
+                    const overlap = m.depths[0];
+                    const n = m.n; // Normal pointing from Bullet -> Verlet
+
+                    // Resolve bullet penetration
+                    b_pos.x -= n.x * (overlap + 0.01);
+                    b_pos.y -= n.y * (overlap + 0.01);
+
+                    // Bounce the bullet
+                    const v_dot_n = (b_vel.x * n.x) + (b_vel.y * n.y);
+                    if (v_dot_n > 0) {
+                        // Invert the normal velocity to bounce
+                        const restitution = 1.2; // Extra bouncy jellies!
+                        b_vel.x -= n.x * v_dot_n * (1.0 + restitution);
+                        b_vel.y -= n.y * v_dot_n * (1.0 + restitution);
+
+                        // Give the jelly a solid smack!
+                        // In verlet, moving old_pos backwards equates to adding forward velocity next frame
+                        const impact_force = 1.5;
+                        vs.old_x -= n.x * v_dot_n * impact_force * it.delta_time;
+                        vs.old_y -= n.y * v_dot_n * impact_force * it.delta_time;
+                    }
+                }
+            }
+        }
+    }
 }
 
 const ExplosionOptions = struct {
@@ -792,11 +918,9 @@ pub fn physics_movement_system(it: *ecs.iter_t, positions: []Position, velocitie
     }
 }
 
-pub fn explosion_system(it: *ecs.iter_t, positions: []Position, velocities: []Velocity, particles: []components.ExplosionParticle) void {
+pub fn explosion_system(it: *ecs.iter_t, positions: []Position, particles: []components.ExplosionParticle) void {
     const dt = it.delta_time;
     const engine = Engine.getEngine(it.world);
-
-    _ = velocities; // We don't actually need to update velocity here, but we include it in the query for easy access if we want to add movement to particles later (e.g., gravity or fading out)
 
     const sprite_size = 5;
 
@@ -984,6 +1108,7 @@ pub fn debug_draw_colliders_with_sdl2_render(world: *ecs.world_t) void {
 
         draw_colliders(positions, colliders, engine, 0, debug_red);
     }
+    ecs.query_fini(ground_q);
 
     // --- LOOP 2: Draw the Constraints (Dedicated and safe) ---
     // var cons_desc = ecs.query_desc_t{};
