@@ -86,6 +86,115 @@ fn checkCollision(world: *ecs.world_t, test_aabb: c2.AABB) bool {
     return false;
 }
 
+fn playerTouchesLandable(world: *ecs.world_t, player_pos: Position, player_col: Collider) bool {
+    const phys = ecs.singleton_get(world, components.PhysicsState) orelse return false;
+    const player_circle = switch (player_col) {
+        .circle => |circle| c2.Circle{
+            .p = .{ .x = player_pos.x + circle.p.x, .y = player_pos.y + circle.p.y },
+            .r = circle.r,
+        },
+        .box => return false,
+    };
+
+    var q_it = ecs.query_iter(world, phys.player_landable_query);
+    while (ecs.query_next(&q_it)) {
+        const core_positions = ecs.field(&q_it, Position, 1).?;
+        const core_colliders = ecs.field(&q_it, Collider, 2).?;
+
+        for (core_positions, core_colliders) |core_pos, core_col| {
+            const core_circle = switch (core_col) {
+                .circle => |circle| c2.Circle{
+                    .p = .{ .x = core_pos.x + circle.p.x, .y = core_pos.y + circle.p.y },
+                    .r = circle.r,
+                },
+                .box => continue,
+            };
+
+            var contact: c2.Manifold = undefined;
+            contact.count = 0;
+            c2.circleToCircleManifold(player_circle, core_circle, &contact);
+
+            if (contact.count > 0) return true;
+        }
+    }
+
+    return false;
+}
+
+fn resolvePlayerLandableContacts(
+    world: *ecs.world_t,
+    player_pos: *Position,
+    player_vel: *Velocity,
+    player_col: Collider,
+) void {
+    const phys = ecs.singleton_get(world, components.PhysicsState) orelse return;
+
+    const player_circle = switch (player_col) {
+        .circle => |circle| c2.Circle{
+            .p = .{
+                .x = player_pos.x + circle.p.x,
+                .y = player_pos.y + circle.p.y,
+            },
+            .r = circle.r,
+        },
+        .box => return,
+    };
+
+    var q_it = ecs.query_iter(world, phys.player_landable_query);
+    while (ecs.query_next(&q_it)) {
+        const core_positions = ecs.field(&q_it, Position, 1).?;
+        const core_colliders = ecs.field(&q_it, Collider, 2).?;
+        const core_verlets = ecs.field(&q_it, components.VerletState, 3).?;
+
+        for (core_positions, core_colliders, core_verlets) |*core_pos, core_col, *core_verlet| {
+            const core_circle = switch (core_col) {
+                .circle => |circle| c2.Circle{
+                    .p = .{
+                        .x = core_pos.x + circle.p.x,
+                        .y = core_pos.y + circle.p.y,
+                    },
+                    .r = circle.r,
+                },
+                .box => continue,
+            };
+
+            var contact: c2.Manifold = undefined;
+            contact.count = 0;
+            c2.circleToCircleManifold(player_circle, core_circle, &contact);
+
+            if (contact.count == 0) continue;
+
+            const separation = contact.depths[0] + 0.01;
+            const normal = contact.n; // Player -> jelly core
+            const landing = player_vel.y > 0.0 and normal.y > 0.5;
+
+            if (landing) {
+                // Keep the player primarily responsible for separating, so it can stand.
+                const player_share: f32 = 0.85;
+                const core_share: f32 = 0.15;
+
+                player_pos.x -= normal.x * separation * player_share;
+                player_pos.y -= normal.y * separation * player_share;
+                player_vel.y = 0.0;
+
+                // Slightly compress the core while preserving its implicit Verlet velocity.
+                const push_x = normal.x * separation * core_share;
+                const push_y = normal.y * separation * core_share;
+                core_pos.x += push_x;
+                core_pos.y += push_y;
+                core_verlet.old_x += push_x;
+                core_verlet.old_y += push_y;
+            } else {
+                // Preserve the current strong “player pushes jelly away” behavior.
+                core_pos.x += normal.x * separation;
+                core_pos.y += normal.y * separation;
+                core_verlet.old_x += normal.x * separation;
+                core_verlet.old_y += normal.y * separation;
+            }
+        }
+    }
+}
+
 // --- Systems ---
 
 pub fn gravity_system(it: *ecs.iter_t, velocities: []Velocity) void {
@@ -212,7 +321,10 @@ pub fn player_controller_system(it: *ecs.iter_t, positions: []Position, velociti
         // Ground Check
         const test_pos = Position{ .x = pos.x, .y = pos.y + 1 };
         const test_aabb = getWorldAABB(test_pos, col);
-        const is_grounded = checkCollision(world, test_aabb);
+        // const is_grounded = checkCollision(world, test_aabb);
+        const is_grounded =
+            checkCollision(world, test_aabb) or
+            playerTouchesLandable(world, test_pos, col);
 
         // 1. Horizontal Input
         var dx: f32 = 0;
@@ -261,6 +373,8 @@ pub fn player_controller_system(it: *ecs.iter_t, positions: []Position, velociti
             pos.y -= vel.y * dt;
             vel.y = 0;
         }
+
+        resolvePlayerLandableContacts(world, pos, vel, col);
     }
 }
 
@@ -686,7 +800,15 @@ pub fn verlet_collision_system(it: *ecs.iter_t, positions: []Position, verlets: 
             if (ecs.get(world, pc.entity, Collider)) |p_col| {
                 const player_aabb = getWorldAABB(p_pos.*, p_col.*);
 
-                for (positions, verlets, colliders, physicsBodies) |*pos, *vs, col, *pb| {
+                const verlet_entities = it.entities();
+
+                for (positions, verlets, colliders, physicsBodies, 0..) |*pos, *vs, col, *pb, entity_index| {
+                    const entity = verlet_entities[entity_index];
+
+                    if (ecs.has_id(world, entity, ecs.id(components.PlayerLandable))) {
+                        continue;
+                    }
+
                     var m: c2.Manifold = undefined;
                     m.count = 0;
 

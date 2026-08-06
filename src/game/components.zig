@@ -43,6 +43,7 @@ pub const PhysicsBody = struct {
 };
 
 pub const GroundGrid = struct {};
+pub const PlayerLandable = struct {};
 
 // singletons for easy access
 pub const GroundGroup = struct {
@@ -57,9 +58,11 @@ pub const PlayerContainer = struct {
     entity: ecs.entity_t,
 };
 
+// cached queries for physics systems
 pub const PhysicsState = struct {
     ground_query: *ecs.query_t,
-    verlet_query: *ecs.query_t, // Add this!
+    verlet_query: *ecs.query_t,
+    player_landable_query: *ecs.query_t,
 };
 
 // IK

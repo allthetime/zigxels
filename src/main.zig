@@ -162,6 +162,7 @@ fn register_components(world: *ecs.world_t) void {
     ecs.TAG(world, C.Destroyable);
     ecs.TAG(world, C.EffectZone);
     ecs.TAG(world, C.GroundGrid);
+    ecs.TAG(world, C.PlayerLandable);
 
     ecs.COMPONENT(world, input_mod.InputState);
     ecs.COMPONENT(world, C.PhysicsState);
@@ -183,14 +184,6 @@ fn register_components(world: *ecs.world_t) void {
 
 fn register_systems(world: *ecs.world_t) void {
     // 1. Player Controller (Handling Input + Movement + Collision)
-
-    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_controller", ecs.OnUpdate, game.player_controller_system, &.{
-        .{ .id = ecs.id(C.Player) },
-        .{ .id = ecs.id(C.Position) },
-        .{ .id = ecs.id(C.Velocity) },
-        .{ .id = ecs.id(C.Collider) },
-        .{ .id = ecs.id(C.RecoilImpulse) },
-    });
 
     _ = ecs.ADD_SYSTEM(world, "input_capture", ecs.OnUpdate, game.right_controller_stick_set_mouse_xy_system);
 
@@ -229,6 +222,14 @@ fn register_systems(world: *ecs.world_t) void {
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "attachment_system", ecs.OnUpdate, game.attachment_solver_system, &.{
         .{ .id = ecs.pair(ecs.id(C.AttachedTo), ecs.Wildcard) },
         .{ .id = ecs.id(C.Position) },
+    });
+
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_controller", ecs.OnUpdate, game.player_controller_system, &.{
+        .{ .id = ecs.id(C.Player) },
+        .{ .id = ecs.id(C.Position) },
+        .{ .id = ecs.id(C.Velocity) },
+        .{ .id = ecs.id(C.Collider) },
+        .{ .id = ecs.id(C.RecoilImpulse) },
     });
 
     // _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "constraint_solver", ecs.OnUpdate, game.constraint_solver_system, &.{
@@ -405,11 +406,11 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) !void
     // spawn_jelly_blob(world, center_x, 50.0, 30.0, 12);
 
     // Spawn 3: Slightly to the right, large
-    // spawn_jelly_blob(world, center_x + 120.0, 150.0, 120.0, 10);
+    spawn_jelly_blob(world, center_x + 120.0, 150.0, 120.0, 10);
 
-    for (0..5) |i| {
-        spawn_jelly_blob(world, center_x + (@as(f32, @floatFromInt(i)) * 50.0) - 100.0, 100.0, 80.0, 13);
-    }
+    // for (0..5) |i| {
+    // spawn_jelly_blob(world, center_x + (@as(f32, @floatFromInt(i)) * 50.0) - 100.0, 100.0, 80.0, 13);
+    // }
 
     // Cache the Ground Query for Physics Systems
     var desc = ecs.query_desc_t{};
@@ -427,7 +428,18 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) !void
     v_desc.terms[3] = .{ .id = ecs.id(C.PhysicsBody), .inout = .In };
     const verlet_query = ecs.query_init(world, &v_desc) catch unreachable;
 
-    _ = ecs.singleton_set(world, C.PhysicsState, .{ .ground_query = ground_q, .verlet_query = verlet_query });
+    var landable_desc = ecs.query_desc_t{};
+    landable_desc.terms[0] = .{ .id = ecs.id(C.PlayerLandable) };
+    landable_desc.terms[1] = .{ .id = ecs.id(C.Position), .inout = .InOut };
+    landable_desc.terms[2] = .{ .id = ecs.id(C.Collider), .inout = .In };
+    landable_desc.terms[3] = .{ .id = ecs.id(C.VerletState), .inout = .InOut };
+    const player_landable_query = ecs.query_init(world, &landable_desc) catch unreachable;
+
+    _ = ecs.singleton_set(world, C.PhysicsState, .{
+        .ground_query = ground_q,
+        .verlet_query = verlet_query,
+        .player_landable_query = player_landable_query,
+    });
 
     // all bullets group
     const bullets_group = ecs.new_entity(world, "Bullets");
@@ -548,6 +560,8 @@ fn spawn_jelly_blob(world: *ecs.world_t, cx: f32, cy: f32, radius: f32, segments
     const nodes = allocator.alloc(ecs.entity_t, segments) catch unreachable;
     // 1. Create the CORE (The structural anchor)
     const center = ecs.new_id(world);
+    ecs.add(world, center, C.PlayerLandable);
+
     _ = ecs.set(world, center, C.Position, .{ .x = cx, .y = cy });
     _ = ecs.set(world, center, C.VerletState, .{ .old_x = cx, .old_y = cy, .friction = 0.99 });
     _ = ecs.set(world, center, C.Velocity, .{ .x = 0, .y = 0 }); // Needed for your integration
@@ -579,11 +593,18 @@ fn spawn_jelly_blob(world: *ecs.world_t, cx: f32, cy: f32, radius: f32, segments
         _ = ecs.set(world, node, C.PhysicsBody, .{ .restitution = 0.1, .friction = 0.9 });
         _ = ecs.set(world, node, C.Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 255, .a = 255 } });
 
+        // reach towards the player
+        const player = ecs.singleton_get(world, C.PlayerContainer).?.entity;
+
+        _ = ecs.set_pair(world, node, ecs.id(C.ReachTowards), player, C.ReachTowards, .{
+            .stiffness = 0.1,
+        });
+
         // Attachment A: Connect to the Center (The spoke)
         // Stiffness < 1.0 makes it squishy like jello!
         _ = ecs.set_pair(world, node, ecs.id(C.AttachedTo), center, C.AttachedTo, .{
-            .dist = radius,
-            .stiffness = 0.3,
+            .dist = radius + (2.0 * @as(f32, @floatFromInt(i))),
+            .stiffness = 0.1,
         });
     }
 
