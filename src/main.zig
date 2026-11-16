@@ -71,6 +71,7 @@ pub fn main(init: std.process.Init) !void {
     var step_accum = FixedStepAccumulator{};
     var last_title_update_ns: u64 = last_time_ns;
     var last_log_ns: u64 = last_time_ns;
+    var smoothed_dt: f32 = 1.0 / 60.0;
 
     // Activate Flecs Explorer web console: https://www.flecs.dev/explorer?host=localhost:2771
     ecs.FlecsRestImport(world);
@@ -94,6 +95,10 @@ pub fn main(init: std.process.Init) !void {
             input.reset = false;
             step_accum.reset();
         }
+        if (input.refill) {
+            world_mod.refill_player_liquid(world);
+            input.refill = false;
+        }
 
         const mouse_cursor = ecs.lookup(world, "MouseCursor");
         if (input.active_input_method != .controller) {
@@ -108,9 +113,14 @@ pub fn main(init: std.process.Init) !void {
             }
         }
 
+        if (frame_dt > 0.0001 and frame_dt < 0.5) {
+            smoothed_dt = smoothed_dt * 0.9 + frame_dt * 0.1;
+        }
+
         if (ecs.singleton_get_mut(world, C.FrameMetrics)) |metrics| {
             metrics.resetPerFrame();
             metrics.frame_dt_ms = frame_dt * 1000.0;
+            metrics.fps = if (smoothed_dt > 0.0001) 1.0 / smoothed_dt else 0.0;
         }
 
         const step_plan = step_accum.advance(frame_dt);
@@ -144,7 +154,9 @@ pub fn main(init: std.process.Init) !void {
         engine.renderFrame(flecs_dt);
         const gl_end_ns = engine_mod.Engine.getTicksNs();
 
-        world_mod.updateEntityCounts(world);
+        if (input.debug_mode) {
+            world_mod.updateEntityCounts(world);
+        }
         if (ecs.singleton_get_mut(world, C.FrameMetrics)) |metrics| {
             metrics.fixed_steps = @intCast(step_plan.steps);
             metrics.dropped_excess_time = step_plan.dropped_excess;
@@ -159,19 +171,22 @@ pub fn main(init: std.process.Init) !void {
                     last_title_update_ns = 0;
                 }
                 if (gl_end_ns -| last_title_update_ns >= 250_000_000) {
-                    var title_buf: [192]u8 = undefined;
+                    var title_buf: [240]u8 = undefined;
                     if (std.fmt.bufPrint(
                         title_buf[0 .. title_buf.len - 1],
-                        "PIXELS | steps:{d} upd:{d:.2}ms cpu:{d:.2}ms gl:{d:.2}ms | ents(B:{d} G:{d} V:{d} E:{d}) | col:{d}/{d}",
+                        "PIXELS | fps:{d:.0} steps:{d} upd:{d:.2}ms cpu:{d:.2}ms gl:{d:.2}ms | ents(B:{d} V:{d} E:{d}) mat(act:{d} liq:{d} sand:{d}) | col:{d}/{d}",
                         .{
+                            metrics.fps,
                             metrics.fixed_steps,
                             metrics.update_ms,
                             metrics.render_cpu_ms,
                             metrics.render_gl_ms,
                             metrics.bullet_count,
-                            metrics.ground_count,
                             metrics.verlet_count,
                             metrics.explosion_count,
+                            metrics.material_active_cells,
+                            metrics.material_liquid_cells,
+                            metrics.material_sand_cells,
                             metrics.totalCollisionHits(),
                             metrics.totalCollisionChecks(),
                         },
@@ -200,17 +215,21 @@ fn nsToMs(ns: u64) f32 {
 
 fn logDebugMetrics(m: C.FrameMetrics) void {
     std.log.info(
-        "perf: steps={d} dt={d:.2}ms upd={d:.2}ms render_cpu={d:.2}ms render_gl={d:.2}ms | ents(bullets={d} ground={d} verlet={d} explosions={d}) | col(hits={d}/checks={d} phys={d}/{d} vg={d}/{d} vs={d}/{d} vb={d}/{d})",
+        "perf: fps={d:.1} steps={d} dt={d:.2}ms upd={d:.2}ms render_cpu={d:.2}ms render_gl={d:.2}ms | ents(bullets={d} verlet={d} explosions={d}) mat(act={d} rock={d} sand={d} liq={d}) | col(hits={d}/checks={d} phys={d}/{d} vg={d}/{d} vs={d}/{d} vb={d}/{d})",
         .{
+            m.fps,
             m.fixed_steps,
             m.frame_dt_ms,
             m.update_ms,
             m.render_cpu_ms,
             m.render_gl_ms,
             m.bullet_count,
-            m.ground_count,
             m.verlet_count,
             m.explosion_count,
+            m.material_active_cells,
+            m.material_rock_cells,
+            m.material_sand_cells,
+            m.material_liquid_cells,
             m.totalCollisionHits(),
             m.totalCollisionChecks(),
             m.physics_hits,
@@ -239,6 +258,7 @@ fn measureDeltaTime(last_time_ns: *u64) f32 {
 test {
     _ = @import("engine/effects.zig");
     _ = @import("engine/pixels.zig");
+    _ = @import("game/material_world.zig");
     _ = systems;
     _ = world_mod;
 }

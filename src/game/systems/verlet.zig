@@ -2,13 +2,16 @@ const std = @import("std");
 const ecs = @import("zflecs");
 const c2 = @import("zig_c2");
 const C = @import("../components.zig");
+const mw = @import("../material_world.zig");
 const Engine = @import("../../engine/core.zig").Engine;
+const pixel_mod = @import("../../engine/pixels.zig");
 const physics = @import("physics.zig");
 
 pub const SOLVER_ITERATIONS: usize = 8;
 pub const JELLY_REPULSION: f32 = 0.35;
-pub const SELF_COLLISION_PRESERVE_VELOCITY: f32 = 0.85;
-pub const MAX_VERLET_SPEED: f32 = 20.0;
+pub const SELF_COLLISION_PRESERVE_VELOCITY: f32 = 0.15;
+pub const MAX_VERLET_SPEED: f32 = 14.0;
+const MAX_FAST_ADJ: usize = 128;
 
 const DEFAULT_TERRAIN_BODY = C.PhysicsBody{
     .restitution = 0.0,
@@ -49,9 +52,58 @@ const ParticleEntry = struct {
     body: C.PhysicsBody,
     has_physics_body: bool,
     is_landable: bool,
+    is_linked_to_player: bool = false,
     has_terrain_contact: bool = false,
     terrain_normal: c2.Vec2 = .{ .x = 0.0, .y = 0.0 },
 };
+
+fn findParticleIndex(particles: []const ParticleEntry, entity: ecs.entity_t) ?usize {
+    var lo: usize = 0;
+    var hi: usize = particles.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const mid_ent = particles[mid].entity;
+        if (mid_ent == entity) return mid;
+        if (mid_ent < entity) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return null;
+}
+
+inline fn packEdgeIndices(a: usize, b: usize) u64 {
+    const lo: u64 = @min(a, b);
+    const hi: u64 = @max(a, b);
+    return (lo << 32) | hi;
+}
+
+fn isLinkedIndex(
+    use_fast_adj: bool,
+    fast_adj: *const [MAX_FAST_ADJ]u128,
+    fallback_edges: []const u64,
+    i: usize,
+    j: usize,
+) bool {
+    if (use_fast_adj) {
+        return (fast_adj[i] & (@as(u128, 1) << @intCast(j))) != 0;
+    }
+    const target = packEdgeIndices(i, j);
+    var lo: usize = 0;
+    var hi: usize = fallback_edges.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const val = fallback_edges[mid];
+        if (val == target) return true;
+        if (val < target) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return false;
+}
 
 const ConstraintEntry = struct {
     child_entity: ecs.entity_t,
@@ -78,7 +130,7 @@ fn constraintLessThan(_: void, a: ConstraintEntry, b: ConstraintEntry) bool {
 }
 
 fn verletPredict(particles: []ParticleEntry, dt: f32) void {
-    const accel_y = physics.GRAVITY * 2.0 * dt * dt;
+    const accel_y = physics.GRAVITY * 1.6 * dt * dt;
     for (particles) |p| {
         const vx = (p.pos.x - p.state.old_x) * p.state.friction;
         const vy = (p.pos.y - p.state.old_y) * p.state.friction;
@@ -105,7 +157,18 @@ fn applyReachDrives(world: *ecs.world_t, reach_query: *ecs.query_t, dt: f32) voi
         for (reach_data, positions) |data, *pos| {
             const dx = t_pos.x - pos.x;
             const dy = t_pos.y - pos.y;
-            translateInjectVelocity(pos, dx * data.stiffness * dt, dy * data.stiffness * dt);
+            const dist_sq = dx * dx + dy * dy;
+            if (dist_sq <= 0.0001) continue;
+
+            if (data.stiffness < 0.25) {
+                // Cap effective reach distance while preserving lively crawl/spin momentum
+                const dist = @sqrt(dist_sq);
+                const capped = @min(dist, 320.0);
+                const scale = (capped / dist) * data.stiffness * dt;
+                translateInjectVelocity(pos, dx * scale, dy * scale);
+            } else {
+                translateInjectVelocity(pos, dx * data.stiffness * dt, dy * data.stiffness * dt);
+            }
         }
     }
 }
@@ -132,8 +195,10 @@ fn solveAttachmentConstraints(constraints: []const ConstraintEntry) void {
 }
 
 fn solveSelfCollisions(
-    world: *ecs.world_t,
     particles: []ParticleEntry,
+    use_fast_adj: bool,
+    fast_adj: *const [MAX_FAST_ADJ]u128,
+    fallback_edges: []const u64,
     checks_out: *u32,
     hits_out: *u32,
 ) void {
@@ -142,18 +207,23 @@ fn solveSelfCollisions(
     for (particles, 0..) |p1, i| {
         const c1 = p1.collider orelse continue;
         if (c1 != .circle) continue;
+        const p1x = p1.pos.x + c1.circle.p.x;
+        const p1y = p1.pos.y + c1.circle.p.y;
+        const r1 = c1.circle.r;
 
-        for (particles[i + 1 ..]) |p2| {
+        for (particles[i + 1 ..], i + 1..) |p2, j| {
             const c_2 = p2.collider orelse continue;
             if (c_2 != .circle) continue;
-            if (areDirectlyLinked(world, p1.entity, p2.entity)) continue;
 
             checks_out.* += 1;
-            const dx = (p2.pos.x + c_2.circle.p.x) - (p1.pos.x + c1.circle.p.x);
-            const dy = (p2.pos.y + c_2.circle.p.y) - (p1.pos.y + c1.circle.p.y);
+            const dx = (p2.pos.x + c_2.circle.p.x) - p1x;
+            const dy = (p2.pos.y + c_2.circle.p.y) - p1y;
+            const min_dist = r1 + c_2.circle.r;
+            if (@abs(dx) >= min_dist or @abs(dy) >= min_dist) continue;
+
             const dist_sq = (dx * dx) + (dy * dy);
-            const min_dist = c1.circle.r + c_2.circle.r;
             if (dist_sq >= min_dist * min_dist) continue;
+            if (isLinkedIndex(use_fast_adj, fast_adj, fallback_edges, i, j)) continue;
 
             hits_out.* += 1;
             const dist = @sqrt(dist_sq);
@@ -174,20 +244,25 @@ fn solveSelfCollisions(
 }
 
 fn solvePlayerContacts(
-    world: *ecs.world_t,
     particles: []ParticleEntry,
-    player_entity: ecs.entity_t,
     player_pos: *C.Position,
     player_vel: *C.Velocity,
     player_col: C.Collider,
 ) void {
     if (player_col != .circle) return;
+    const p_cx = player_pos.x + player_col.circle.p.x;
+    const p_cy = player_pos.y + player_col.circle.p.y;
+    const p_r = player_col.circle.r;
 
     for (particles) |p| {
         const col = p.collider orelse continue;
 
         if (p.is_landable) {
             if (col != .circle) continue;
+            const max_r = p_r + col.circle.r;
+            if (@abs(p.pos.x + col.circle.p.x - p_cx) >= max_r or
+                @abs(p.pos.y + col.circle.p.y - p_cy) >= max_r) continue;
+
             const contact = physics.collideManifold(player_pos.*, player_col, p.pos.*, col);
             if (contact.count == 0) continue;
 
@@ -219,7 +294,12 @@ fn solvePlayerContacts(
                     normal.y * separation,
                 );
             }
-        } else if (p.has_physics_body and !areDirectlyLinked(world, p.entity, player_entity)) {
+        } else if (p.has_physics_body and !p.is_linked_to_player) {
+            if (col == .circle) {
+                const max_r = p_r + col.circle.r;
+                if (@abs(p.pos.x + col.circle.p.x - p_cx) >= max_r or
+                    @abs(p.pos.y + col.circle.p.y - p_cy) >= max_r) continue;
+            }
             const m = physics.collideManifold(p.pos.*, col, player_pos.*, player_col);
             if (m.count > 0) {
                 const push = m.depths[0] + physics.SURFACE_EPSILON;
@@ -231,10 +311,138 @@ fn solvePlayerContacts(
 
 fn solveTerrainContacts(
     particles: []ParticleEntry,
+    grid: ?*const mw.MaterialGrid,
     grounds: []const GroundEntry,
     checks_out: *u32,
     hits_out: *u32,
 ) void {
+    if (grid) |mg| {
+        if (mg.width > 0 and mg.height > 0) {
+            const cs_f = mg.cellSizeF();
+            const half = cs_f * 0.5;
+            const max_w = @as(f32, @floatFromInt(mg.width)) * cs_f;
+            const max_h = @as(f32, @floatFromInt(mg.height)) * cs_f;
+            const cell_col = C.Collider{ .box = .{
+                .min = .{ .x = -half, .y = -half },
+                .max = .{ .x = half, .y = half },
+            } };
+
+            for (particles) |*p| {
+                const col = p.collider orelse continue;
+
+                const aabb = physics.getWorldAABB(p.pos.*, col);
+                const min_gx = @max(0, mg.worldToCellX(aabb.min.x));
+                const max_gx = @min(@as(i32, @intCast(mg.width)) - 1, mg.worldToCellX(aabb.max.x - 0.0001));
+                const min_gy = @max(0, mg.worldToCellY(aabb.min.y));
+                const max_gy = @min(@as(i32, @intCast(mg.height)) - 1, mg.worldToCellY(aabb.max.y - 0.0001));
+
+                if (max_gx >= min_gx and max_gy >= min_gy) {
+                    var best_depth: f32 = 0.0;
+                    var best_n: c2.Vec2 = .{ .x = 0.0, .y = 0.0 };
+                    var found = false;
+
+                    switch (col) {
+                        .circle => |c| {
+                            const cx = p.pos.x + c.p.x;
+                            const cy = p.pos.y + c.p.y;
+                            const r = c.r;
+                            const r_sq = r * r;
+
+                            var gy = min_gy;
+                            while (gy <= max_gy) : (gy += 1) {
+                                const row_base = @as(usize, @intCast(gy)) * mg.width;
+                                const cell_cy = (@as(f32, @floatFromInt(gy)) + 0.5) * cs_f;
+                                const bmin_y = cell_cy - half;
+                                const bmax_y = cell_cy + half;
+                                const closest_y = std.math.clamp(cy, bmin_y, bmax_y);
+                                const dy = closest_y - cy;
+                                const dy_sq = dy * dy;
+
+                                var gx = min_gx;
+                                while (gx <= max_gx) : (gx += 1) {
+                                    checks_out.* += 1;
+                                    if (!mg.cells[row_base + @as(usize, @intCast(gx))].material.isSolid()) continue;
+
+                                    const cell_cx = (@as(f32, @floatFromInt(gx)) + 0.5) * cs_f;
+                                    const closest_x = std.math.clamp(cx, cell_cx - half, cell_cx + half);
+                                    const dx = closest_x - cx;
+                                    const dist_sq = dx * dx + dy_sq;
+                                    if (dist_sq >= r_sq) continue;
+
+                                    var depth: f32 = undefined;
+                                    var nx: f32 = undefined;
+                                    var ny: f32 = undefined;
+                                    if (dist_sq > 1e-8) {
+                                        const dist = @sqrt(dist_sq);
+                                        depth = r - dist;
+                                        nx = dx / dist;
+                                        ny = dy / dist;
+                                    } else {
+                                        const px_pen = half - @abs(cx - cell_cx);
+                                        const py_pen = half - @abs(cy - cell_cy);
+                                        if (px_pen < py_pen) {
+                                            depth = r + px_pen;
+                                            nx = if (cx < cell_cx) 1.0 else -1.0;
+                                            ny = 0.0;
+                                        } else {
+                                            depth = r + py_pen;
+                                            nx = 0.0;
+                                            ny = if (cy < cell_cy) 1.0 else -1.0;
+                                        }
+                                    }
+
+                                    if (!found or depth > best_depth) {
+                                        best_depth = depth;
+                                        best_n = .{ .x = nx, .y = ny };
+                                        found = true;
+                                    }
+                                }
+                            }
+                        },
+                        .box => {
+                            var gy = min_gy;
+                            while (gy <= max_gy) : (gy += 1) {
+                                const row_base = @as(usize, @intCast(gy)) * mg.width;
+                                const cell_cy = (@as(f32, @floatFromInt(gy)) + 0.5) * cs_f;
+                                var gx = min_gx;
+                                while (gx <= max_gx) : (gx += 1) {
+                                    checks_out.* += 1;
+                                    if (!mg.cells[row_base + @as(usize, @intCast(gx))].material.isSolid()) continue;
+
+                                    const cell_pos = C.Position{ .x = (@as(f32, @floatFromInt(gx)) + 0.5) * cs_f, .y = cell_cy };
+                                    const m = physics.collideManifold(p.pos.*, col, cell_pos, cell_col);
+                                    if (m.count == 0) continue;
+
+                                    if (!found or m.depths[0] > best_depth) {
+                                        best_depth = m.depths[0];
+                                        best_n = m.n;
+                                        found = true;
+                                    }
+                                }
+                            }
+                        },
+                    }
+
+                    if (found) {
+                        hits_out.* += 1;
+                        const push = best_depth + physics.SURFACE_EPSILON;
+                        translateInjectVelocity(p.pos, -best_n.x * push, -best_n.y * push);
+                        p.has_terrain_contact = true;
+                        p.terrain_normal = best_n;
+                    }
+                }
+
+                // Room-bounds safety containment so Verlet particles never escape the viewport
+                const r_pad: f32 = switch (col) {
+                    .circle => |c| c.r,
+                    .box => |b| @max(b.max.x - b.min.x, b.max.y - b.min.y) * 0.5,
+                };
+                p.pos.x = std.math.clamp(p.pos.x, r_pad, @max(r_pad, max_w - r_pad));
+                p.pos.y = std.math.clamp(p.pos.y, r_pad, @max(r_pad, max_h - r_pad));
+            }
+        }
+    }
+
     for (particles) |*p| {
         const col = p.collider orelse continue;
 
@@ -296,14 +504,15 @@ pub fn stepVerletPBDWithAllocator(world: *ecs.world_t, allocator: std.mem.Alloca
         const v_ents = v_it.entities();
 
         for (0..v_it.count()) |i| {
+            const v_ent = v_ents[i];
             particles.append(allocator, .{
-                .entity = v_ents[i],
+                .entity = v_ent,
                 .pos = &v_positions[i],
                 .state = &v_states[i],
                 .collider = if (v_colliders) |cols| cols[i] else null,
                 .body = if (v_bodies) |bodies| bodies[i] else DEFAULT_TERRAIN_BODY,
                 .has_physics_body = v_bodies != null,
-                .is_landable = ecs.has_id(world, v_ents[i], ecs.id(C.PlayerLandable)),
+                .is_landable = ecs.has_id(world, v_ent, ecs.id(C.PlayerLandable)),
             }) catch return;
         }
     }
@@ -343,14 +552,17 @@ pub fn stepVerletPBDWithAllocator(world: *ecs.world_t, allocator: std.mem.Alloca
 
     var grounds: std.ArrayList(GroundEntry) = .empty;
     defer grounds.deinit(allocator);
-    var g_it = ecs.query_iter(world, phys.ground_query);
-    while (ecs.query_next(&g_it)) {
-        const g_positions = ecs.field(&g_it, C.Position, 1).?;
-        const g_colliders = ecs.field(&g_it, C.Collider, 2).?;
-        for (g_positions, g_colliders) |gp, gcol| {
-            grounds.append(allocator, .{ .pos = gp, .col = gcol }) catch return;
+    if (phys.ground_query) |ground_q| {
+        var g_it = ecs.query_iter(world, ground_q);
+        while (ecs.query_next(&g_it)) {
+            const g_positions = ecs.field(&g_it, C.Position, 1).?;
+            const g_colliders = ecs.field(&g_it, C.Collider, 2).?;
+            for (g_positions, g_colliders) |gp, gcol| {
+                grounds.append(allocator, .{ .pos = gp, .col = gcol }) catch return;
+            }
         }
     }
+    const grid = C.singletonGetSafe(world, mw.MaterialGrid);
 
     verletPredict(particles.items, dt);
     if (phys.reach_query) |reach_q| {
@@ -370,18 +582,51 @@ pub fn stepVerletPBDWithAllocator(world: *ecs.world_t, allocator: std.mem.Alloca
         }
     }
 
+    // Precompute O(1) self-collision adjacency and player-link flags once outside the solver loop.
+    const use_fast_adj = particles.items.len <= MAX_FAST_ADJ;
+    var fast_adj: [MAX_FAST_ADJ]u128 = @splat(0);
+    var fallback_edges: std.ArrayList(u64) = .empty;
+    defer fallback_edges.deinit(allocator);
+
+    for (constraints.items) |c| {
+        const ci_opt = findParticleIndex(particles.items, c.child_entity);
+        const pi_opt = findParticleIndex(particles.items, c.parent_entity);
+        if (player_entity != 0) {
+            if (c.parent_entity == player_entity) {
+                if (ci_opt) |ci| particles.items[ci].is_linked_to_player = true;
+            } else if (c.child_entity == player_entity) {
+                if (pi_opt) |pi| particles.items[pi].is_linked_to_player = true;
+            }
+        }
+        if (ci_opt) |ci| {
+            if (pi_opt) |pi| {
+                if (use_fast_adj) {
+                    fast_adj[ci] |= @as(u128, 1) << @intCast(pi);
+                    fast_adj[pi] |= @as(u128, 1) << @intCast(ci);
+                } else {
+                    fallback_edges.append(allocator, packEdgeIndices(ci, pi)) catch return;
+                }
+            }
+        }
+    }
+    if (!use_fast_adj and fallback_edges.items.len > 1) {
+        std.sort.pdq(u64, fallback_edges.items, {}, std.sort.asc(u64));
+    }
+
     var ground_checks: u32 = 0;
     var ground_hits: u32 = 0;
     var self_checks: u32 = 0;
     var self_hits: u32 = 0;
 
-    for (0..SOLVER_ITERATIONS) |_| {
+    for (0..SOLVER_ITERATIONS) |iter| {
         solveAttachmentConstraints(constraints.items);
-        solveSelfCollisions(world, particles.items, &self_checks, &self_hits);
+        solveSelfCollisions(particles.items, use_fast_adj, &fast_adj, fallback_edges.items, &self_checks, &self_hits);
         if (player_pos != null and player_vel != null and player_col != null) {
-            solvePlayerContacts(world, particles.items, player_entity, player_pos.?, player_vel.?, player_col.?);
+            solvePlayerContacts(particles.items, player_pos.?, player_vel.?, player_col.?);
         }
-        solveTerrainContacts(particles.items, grounds.items, &ground_checks, &ground_hits);
+        if (iter == 0 or iter == 3 or iter == SOLVER_ITERATIONS - 1) {
+            solveTerrainContacts(particles.items, grid, grounds.items, &ground_checks, &ground_hits);
+        }
     }
 
     finalizeVerletVelocities(particles.items);
@@ -418,6 +663,7 @@ pub fn verlet_bullet_collision_system(
     const world = it.world;
     const phys = C.singletonGetSafe(world, C.PhysicsState) orelse return;
     const metrics = C.singletonGetMutSafe(world, C.FrameMetrics);
+    const attachments_group = if (C.singletonGetSafe(world, C.PlayerAttachmentsGroup)) |g| g.entity else 0;
 
     var q_it = ecs.query_iter(world, phys.verlet_query);
 
@@ -426,8 +672,12 @@ pub fn verlet_bullet_collision_system(
         const v_states = ecs.field(&q_it, C.VerletState, 1).?;
         const v_colliders = ecs.field(&q_it, C.Collider, 2) orelse continue;
         if (ecs.field(&q_it, C.PhysicsBody, 3) == null) continue;
+        const v_ents = q_it.entities();
 
-        for (v_positions, v_states, v_colliders) |v_pos, *vs, v_col| {
+        for (v_positions, v_states, v_colliders, 0..) |v_pos, *vs, v_col, v_idx| {
+            const v_ent = v_ents[v_idx];
+            if (attachments_group != 0 and ecs.has_pair(world, v_ent, ecs.ChildOf, attachments_group)) continue;
+
             for (bullet_positions, bullet_velocities, bullet_colliders) |*b_pos, *b_vel, b_col| {
                 if (metrics) |mtr| mtr.verlet_bullet_checks += 1;
                 const m = physics.collideManifold(b_pos.*, b_col, v_pos, v_col);
@@ -446,12 +696,21 @@ pub fn verlet_bullet_collision_system(
                     b_vel.x -= n.x * v_dot_n * (1.0 + restitution);
                     b_vel.y -= n.y * v_dot_n * (1.0 + restitution);
 
-                    const impact_force: f32 = 1.5;
+                    const impact_force: f32 = 3.5;
                     applyImpulse(
                         vs,
                         n.x * v_dot_n * impact_force * it.delta_time,
                         n.y * v_dot_n * impact_force * it.delta_time,
                     );
+
+                    if (ecs.id(C.ExplosionParticle) != 0) {
+                        physics.spawnExplosion(world, b_pos.x, b_pos.y, -n.x, -n.y, .{
+                            .speed = 90.0,
+                            .spread = 1.8,
+                            .color = pixel_mod.packColor(210, 120, 255, 255),
+                            .bounce = 0.2,
+                        });
+                    }
                 }
             }
         }
@@ -507,7 +766,7 @@ fn setupTestPhysicsState(world: *ecs.world_t) C.PhysicsState {
 }
 
 fn finiTestPhysicsState(phys: C.PhysicsState) void {
-    ecs.query_fini(phys.ground_query);
+    if (phys.ground_query) |q| ecs.query_fini(q);
     ecs.query_fini(phys.verlet_query);
     ecs.query_fini(phys.player_landable_query);
     ecs.query_fini(phys.collider_query);
@@ -690,4 +949,100 @@ test "PBD resolves recycled target entities across reset without generation asse
     const cp = ecs.get(world, child, C.Position).?;
     const dist = @sqrt((cp.x - pp.x) * (cp.x - pp.x) + (cp.y - pp.y) * (cp.y - pp.y));
     try testing.expectApproxEqAbs(@as(f32, 15.0), dist, 0.5);
+}
+
+test "PBD solver rests multi-core blob on MaterialGrid floor and bullets push/bounce without killing it" {
+    const testing = std.testing;
+    const world = ecs.init();
+    defer _ = ecs.fini(world);
+
+    ecs.COMPONENT(world, C.Position);
+    ecs.COMPONENT(world, C.Velocity);
+    ecs.COMPONENT(world, C.Collider);
+    ecs.COMPONENT(world, C.PhysicsBody);
+    ecs.COMPONENT(world, C.PhysicsState);
+    ecs.COMPONENT(world, C.VerletState);
+    ecs.COMPONENT(world, C.AttachedTo);
+    ecs.COMPONENT(world, C.ReachTowards);
+    ecs.COMPONENT(world, C.PlayerAttachmentsGroup);
+    ecs.COMPONENT(world, mw.MaterialGrid);
+    ecs.TAG(world, C.Ground);
+    ecs.TAG(world, C.PlayerLandable);
+    ecs.TAG(world, C.Bullet);
+
+    const phys = setupTestPhysicsState(world);
+    defer finiTestPhysicsState(phys);
+
+    var grid = try mw.MaterialGrid.init(testing.allocator, 40, 30, 4);
+    defer grid.deinit();
+    // Solid rock floor at gy=20 (y=80..84)
+    grid.fillCellRect(0, 20, 40, 22, .rock, true);
+    _ = ecs.singleton_set(world, mw.MaterialGrid, grid);
+
+    // Two cores connected via an intermediate spine limb
+    const core_a = ecs.new_id(world);
+    ecs.add(world, core_a, C.PlayerLandable);
+    _ = ecs.set(world, core_a, C.Position, .{ .x = 60.0, .y = 60.0 });
+    _ = ecs.set(world, core_a, C.VerletState, .{ .old_x = 60.0, .old_y = 60.0, .friction = 0.98 });
+    _ = ecs.set(world, core_a, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 10.0 } });
+    _ = ecs.set(world, core_a, C.PhysicsBody, .{ .restitution = 0.0, .friction = 0.8 });
+
+    const core_b = ecs.new_id(world);
+    ecs.add(world, core_b, C.PlayerLandable);
+    _ = ecs.set(world, core_b, C.Position, .{ .x = 100.0, .y = 60.0 });
+    _ = ecs.set(world, core_b, C.VerletState, .{ .old_x = 100.0, .old_y = 60.0, .friction = 0.98 });
+    _ = ecs.set(world, core_b, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 10.0 } });
+    _ = ecs.set(world, core_b, C.PhysicsBody, .{ .restitution = 0.0, .friction = 0.8 });
+
+    const spine_limb = ecs.new_id(world);
+    _ = ecs.set(world, spine_limb, C.Position, .{ .x = 80.0, .y = 60.0 });
+    _ = ecs.set(world, spine_limb, C.VerletState, .{ .old_x = 80.0, .old_y = 60.0, .friction = 0.98 });
+    _ = ecs.set(world, spine_limb, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 4.0 } });
+    _ = ecs.set(world, spine_limb, C.PhysicsBody, .{});
+    _ = ecs.set_pair(world, spine_limb, ecs.id(C.AttachedTo), core_a, C.AttachedTo, .{ .dist = 20.0, .stiffness = 1.0 });
+    _ = ecs.set_pair(world, spine_limb, ecs.id(C.AttachedTo), core_b, C.AttachedTo, .{ .dist = 20.0, .stiffness = 1.0 });
+
+    // Player tail particle that bullets must ignore
+    const attach_grp = ecs.new_entity(world, "PlayerAttachments");
+    _ = ecs.singleton_set(world, C.PlayerAttachmentsGroup, .{ .entity = attach_grp });
+    const tail_seg = ecs.new_id(world);
+    ecs.add_pair(world, tail_seg, ecs.ChildOf, attach_grp);
+    _ = ecs.set(world, tail_seg, C.Position, .{ .x = 20.0, .y = 20.0 });
+    _ = ecs.set(world, tail_seg, C.VerletState, .{ .old_x = 20.0, .old_y = 20.0 });
+    _ = ecs.set(world, tail_seg, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 4.0 } });
+    _ = ecs.set(world, tail_seg, C.PhysicsBody, .{});
+
+    // Step PBD: connected blob settles above rock floor at y=80
+    for (0..40) |_| {
+        stepVerletPBDWithAllocator(world, testing.allocator, 1.0 / 120.0);
+    }
+    const core_y = ecs.get(world, core_a, C.Position).?.y;
+    try testing.expect(core_y <= 71.5);
+    try testing.expect(core_y >= 65.0);
+
+    // Bullet hits spine_limb -> bounces bullet (-X), pushes limb (+X), keeps creature alive
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "test_v_bullet", ecs.OnUpdate, verlet_bullet_collision_system, &.{
+        .{ .id = ecs.id(C.Bullet) },
+    });
+    const limb_pos = ecs.get(world, spine_limb, C.Position).?.*;
+    const b1 = ecs.new_id(world);
+    ecs.add(world, b1, C.Bullet);
+    _ = ecs.set(world, b1, C.Position, .{ .x = limb_pos.x - 4.0, .y = limb_pos.y });
+    _ = ecs.set(world, b1, C.Velocity, .{ .x = 500.0, .y = 0.0 });
+    _ = ecs.set(world, b1, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 5.0 } });
+
+    // Second bullet overlapping player tail must pass right through untouched
+    const b2 = ecs.new_id(world);
+    ecs.add(world, b2, C.Bullet);
+    _ = ecs.set(world, b2, C.Position, .{ .x = 20.0, .y = 20.0 });
+    _ = ecs.set(world, b2, C.Velocity, .{ .x = 500.0, .y = 0.0 });
+    _ = ecs.set(world, b2, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 5.0 } });
+
+    _ = ecs.progress(world, 1.0 / 120.0);
+    try testing.expect(ecs.is_alive(world, core_a));
+    try testing.expect(ecs.is_alive(world, core_b));
+    try testing.expect(ecs.is_alive(world, spine_limb));
+    try testing.expect(ecs.get(world, b1, C.Velocity).?.x < 0.0);
+    try testing.expect(ecs.get(world, spine_limb, C.Position).?.x - ecs.get(world, spine_limb, C.VerletState).?.old_x > 0.0);
+    try testing.expectApproxEqAbs(@as(f32, 500.0), ecs.get(world, b2, C.Velocity).?.x, 0.01);
 }

@@ -31,6 +31,8 @@ pub const InputState = struct {
     quit_requested: bool = false,
     pressed_directions: PressedDirections = PressedDirections{},
     reset: bool = false,
+    refill: bool = false,
+    interact: bool = false,
     controller: ?*sdl.SDL_Gamepad = null,
     right_stick_x: f32 = 0.0,
     right_stick_y: f32 = 0.0,
@@ -91,6 +93,12 @@ pub const InputState = struct {
                         sdl.SDL_GAMEPAD_BUTTON_SOUTH => { // Cross on DS4
                             self.d_pad_a_pressed = is_pressed;
                         },
+                        sdl.SDL_GAMEPAD_BUTTON_WEST => {
+                            self.interact = is_pressed;
+                        },
+                        sdl.SDL_GAMEPAD_BUTTON_NORTH => {
+                            if (is_pressed) self.refill = true;
+                        },
                         sdl.SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER => {
                             self.dpad_state.is_pressing = is_pressed;
                         },
@@ -150,6 +158,12 @@ pub const InputState = struct {
                         sdl.SDLK_A => self.keyboard_state.pressed_directions.left = is_pressed,
                         sdl.SDLK_S => self.keyboard_state.pressed_directions.down = is_pressed,
                         sdl.SDLK_D => self.keyboard_state.pressed_directions.right = is_pressed,
+                        sdl.SDLK_E => self.interact = is_pressed,
+                        sdl.SDLK_F => {
+                            if (is_pressed and !event.key.repeat) {
+                                self.refill = true;
+                            }
+                        },
                         sdl.SDLK_R => {
                             if (is_pressed and !event.key.repeat) {
                                 self.reset = true;

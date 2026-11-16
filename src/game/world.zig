@@ -1,6 +1,7 @@
 const std = @import("std");
 const ecs = @import("zflecs");
 const C = @import("components.zig");
+const mw = @import("material_world.zig");
 const Engine = @import("../engine/core.zig").Engine;
 const input_mod = @import("../engine/input.zig");
 const Effect = @import("../engine/effects.zig").Effect;
@@ -18,12 +19,15 @@ extern fn ecs_pipeline_init(world: *ecs.world_t, desc: *const pipeline_desc_t) e
 pub fn setup_game(world: *ecs.world_t, engine: *Engine) !void {
     register_components(world);
     register_systems(world);
-    try spawn_initial_entities(world, engine.arena.allocator(), engine.width, engine.height);
+    try spawn_initial_entities(world, engine.allocator, engine.width, engine.height);
 }
 
 pub fn deinit(world: *ecs.world_t) void {
-    if (ecs.singleton_get(world, C.PhysicsState)) |phys| {
-        ecs.query_fini(phys.ground_query);
+    if (C.singletonGetMutSafe(world, mw.MaterialGrid)) |grid| {
+        grid.deinit();
+    }
+    if (C.singletonGetSafe(world, C.PhysicsState)) |phys| {
+        if (phys.ground_query) |q| ecs.query_fini(q);
         ecs.query_fini(phys.verlet_query);
         ecs.query_fini(phys.player_landable_query);
         ecs.query_fini(phys.collider_query);
@@ -31,7 +35,6 @@ pub fn deinit(world: *ecs.world_t) void {
         if (phys.reach_query) |q| ecs.query_fini(q);
         if (phys.bullet_query) |q| ecs.query_fini(q);
         if (phys.explosion_query) |q| ecs.query_fini(q);
-        if (phys.render_ground_query) |q| ecs.query_fini(q);
         if (phys.render_actor_query) |q| ecs.query_fini(q);
     }
 }
@@ -49,10 +52,18 @@ pub fn updateEntityCounts(world: *ecs.world_t) void {
     const phys = C.singletonGetSafe(world, C.PhysicsState) orelse return;
     const metrics = C.singletonGetMutSafe(world, C.FrameMetrics) orelse return;
 
-    metrics.ground_count = countQueryEntities(world, phys.ground_query);
+    metrics.ground_count = if (phys.ground_query) |q| countQueryEntities(world, q) else 0;
     metrics.verlet_count = countQueryEntities(world, phys.verlet_query);
     metrics.bullet_count = if (phys.bullet_query) |q| countQueryEntities(world, q) else 0;
     metrics.explosion_count = if (phys.explosion_query) |q| countQueryEntities(world, q) else 0;
+
+    if (C.singletonGetSafe(world, mw.MaterialGrid)) |grid| {
+        const counts = grid.countByMaterial();
+        metrics.material_active_cells = grid.active_cells;
+        metrics.material_rock_cells = counts.rock_cells;
+        metrics.material_sand_cells = counts.sand_cells;
+        metrics.material_liquid_cells = counts.totalLiquid();
+    }
 }
 
 pub fn reset_game(world: *ecs.world_t, engine: *Engine) void {
@@ -91,18 +102,19 @@ pub fn reset_world(
     // Clean up any stray ground entities not parented to GroundGroup
     ecs.delete_with(world, ecs.id(C.Ground));
 
-    const w: f32 = @floatFromInt(width);
-    const h: f32 = @floatFromInt(height);
+    const spawn_pos = playerSpawnPos(width, height);
 
     if (ecs.singleton_get(world, C.PlayerContainer)) |pc| {
-        _ = ecs.set(world, pc.entity, C.Position, .{ .x = w / 2.0, .y = h / 2.0 });
+        _ = ecs.set(world, pc.entity, C.Position, spawn_pos);
         _ = ecs.set(world, pc.entity, C.Velocity, .{ .x = 0.0, .y = 0.0 });
         _ = ecs.set(world, pc.entity, C.RecoilImpulse, .{ .x = 0.0 });
+        _ = ecs.set(world, pc.entity, C.LiquidReservoir, .{});
 
         const gun = ecs.lookup_child(world, pc.entity, "Gun");
         if (gun != 0) {
             if (ecs.get_mut(world, gun, C.Gun)) |g| {
                 g.cooldown = 0.0;
+                g.was_pressing = false;
             }
         }
 
@@ -111,14 +123,43 @@ pub fn reset_world(
         }
     }
 
+    if (C.singletonGetMutSafe(world, mw.MaterialGrid)) |grid| {
+        grid.clear();
+    }
+
     @memcpy(background_buffer, sky_buffer);
     spawn_level(world, width, height);
-    spawn_jellies(world, allocator, width);
+    spawn_jellies(world, allocator, width, height);
 
     if (C.singletonGetMutSafe(world, C.FrameMetrics)) |metrics| {
         metrics.resetPerFrame();
     }
     updateEntityCounts(world);
+}
+
+pub fn refill_player_liquid(world: *ecs.world_t) void {
+    if (C.singletonGetSafe(world, C.PlayerContainer)) |pc| {
+        if (ecs.get_mut(world, pc.entity, C.LiquidReservoir)) |res| {
+            res.refillFull(.purple);
+        }
+    }
+    if (C.singletonGetMutSafe(world, mw.MaterialGrid)) |grid| {
+        const counts = grid.countByMaterial();
+        if (counts.liquid_purple_cells < 160 and grid.width >= 100 and grid.height >= 20) {
+            const floor_top: i32 = @intCast(grid.height - 14);
+            grid.fillCellRect(48, floor_top - 8, 96, floor_top, .liquid_purple, false);
+        }
+    }
+}
+
+fn playerSpawnPos(width: usize, height: usize) C.Position {
+    const cs: f32 = @floatFromInt(mw.CELL_SIZE);
+    const max_x = @as(f32, @floatFromInt(width)) - 32.0;
+    const max_y = @as(f32, @floatFromInt(height)) - 32.0;
+    return .{
+        .x = std.math.clamp(24.0 * cs, 32.0, @max(32.0, max_x)),
+        .y = std.math.clamp(154.0 * cs - PLAYER_SIZE * 0.5 - 2.0, 32.0, @max(32.0, max_y)),
+    };
 }
 
 fn register_components(world: *ecs.world_t) void {
@@ -131,16 +172,17 @@ fn register_components(world: *ecs.world_t) void {
     ecs.COMPONENT(world, C.PhysicsBody);
     ecs.COMPONENT(world, C.ExplosionParticle);
     ecs.COMPONENT(world, C.RecoilImpulse);
+    ecs.COMPONENT(world, C.LiquidReservoir);
 
     ecs.TAG(world, C.Bullet);
     ecs.TAG(world, C.Player);
     ecs.TAG(world, C.Ground);
     ecs.TAG(world, C.Destroyable);
     ecs.TAG(world, C.EffectZone);
-    ecs.TAG(world, C.GroundGrid);
     ecs.TAG(world, C.PlayerLandable);
 
     ecs.COMPONENT(world, input_mod.InputState);
+    ecs.COMPONENT(world, mw.MaterialGrid);
     ecs.COMPONENT(world, C.PhysicsState);
     ecs.COMPONENT(world, C.GamePipelines);
     ecs.COMPONENT(world, C.FrameMetrics);
@@ -192,34 +234,23 @@ fn register_systems(world: *ecs.world_t) void {
     // Aim runs before shoot so bullets spawn from current-frame gun position.
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "gun_aim", ecs.OnUpdate, systems.weapons.gun_aim_system, &.{
         .{ .id = ecs.id(C.Gun) },
-        .{ .id = ecs.id(C.Position) },
     });
 
-    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "shoot", ecs.OnUpdate, systems.weapons.shoot_system, &.{
-        .{ .id = ecs.id(C.Gun) },
-        .{ .id = ecs.id(C.Position) },
-    });
+    _ = ecs.ADD_SYSTEM(world, "shoot", ecs.OnUpdate, systems.weapons.shoot_system);
 
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_controller", ecs.OnUpdate, systems.player.player_controller_system, &.{
         .{ .id = ecs.id(C.Player) },
-        .{ .id = ecs.id(C.Position) },
-        .{ .id = ecs.id(C.Velocity) },
-        .{ .id = ecs.id(C.Collider) },
-        .{ .id = ecs.id(C.RecoilImpulse) },
+    });
+
+    _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_drink", ecs.OnUpdate, systems.player.player_drink_system, &.{
+        .{ .id = ecs.id(C.Player) },
     });
 
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "physics_movement", ecs.OnUpdate, systems.physics.physics_movement_system, &.{
-        .{ .id = ecs.id(C.Position) },
-        .{ .id = ecs.id(C.Velocity) },
-        .{ .id = ecs.id(C.PhysicsBody) },
         .{ .id = ecs.id(C.VerletState), .oper = .Not },
     });
 
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "physics_collision", ecs.OnUpdate, systems.physics.physics_collision_system, &.{
-        .{ .id = ecs.id(C.Position) },
-        .{ .id = ecs.id(C.Velocity) },
-        .{ .id = ecs.id(C.Collider) },
-        .{ .id = ecs.id(C.PhysicsBody) },
         .{ .id = ecs.id(C.VerletState), .oper = .Not },
     });
 
@@ -229,22 +260,17 @@ fn register_systems(world: *ecs.world_t) void {
     _ = ecs.SYSTEM(world, "verlet_solver", &verlet_sys_desc);
 
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "verlet_bullet_collision", ecs.OnUpdate, systems.verlet.verlet_bullet_collision_system, &.{
-        .{ .id = ecs.id(C.Position) },
-        .{ .id = ecs.id(C.Velocity) },
-        .{ .id = ecs.id(C.Collider) },
         .{ .id = ecs.id(C.Bullet) },
     });
 
+    _ = ecs.ADD_SYSTEM(world, "material_step", ecs.OnUpdate, systems.physics.material_step_system);
+
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "player_clamp", ecs.OnUpdate, systems.player.player_clamp_system, &.{
         .{ .id = ecs.id(C.Player) },
-        .{ .id = ecs.id(C.Position) },
-        .{ .id = ecs.id(C.Velocity) },
-        .{ .id = ecs.id(C.Collider) },
     });
 
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "bullet_cleanup", ecs.OnUpdate, systems.weapons.bullet_cleanup_system, &.{
         .{ .id = ecs.id(C.Bullet) },
-        .{ .id = ecs.id(C.Position) },
     });
 
     _ = ecs.ADD_SYSTEM_WITH_FILTERS(world, "explosion_lifetime", ecs.OnUpdate, systems.physics.explosion_lifetime_system, &.{
@@ -278,26 +304,29 @@ fn spawn_initial_entities(world: *ecs.world_t, allocator: std.mem.Allocator, wid
     _ = ecs.singleton_set(world, C.AimTarget, .{ .x = 0.0, .y = 0.0 });
     _ = ecs.singleton_set(world, C.FrameMetrics, .{});
 
+    const grid = try mw.MaterialGrid.initForPixels(allocator, width, height, mw.CELL_SIZE);
+    _ = ecs.singleton_set(world, mw.MaterialGrid, grid);
+
     const mouse_cursor = ecs.new_entity(world, "MouseCursor");
     _ = ecs.set(world, mouse_cursor, C.Position, .{ .x = 0.0, .y = 0.0 });
 
-    const w: f32 = @floatFromInt(width);
-    const h: f32 = @floatFromInt(height);
+    const spawn_pos = playerSpawnPos(width, height);
 
     const player = ecs.new_entity(world, "Player");
     ecs.add(world, player, C.Player);
-    _ = ecs.set(world, player, C.Position, .{ .x = w / 2.0, .y = h / 2.0 });
+    _ = ecs.set(world, player, C.Position, spawn_pos);
     _ = ecs.set(world, player, C.Velocity, .{ .x = 0.0, .y = 0.0 });
     _ = ecs.set(world, player, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = PLAYER_SIZE / 2.0 } });
     _ = ecs.set(world, player, C.Renderable, .{ .color = C.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
     _ = ecs.set(world, player, C.RecoilImpulse, .{ .x = 0.0 });
+    _ = ecs.set(world, player, C.LiquidReservoir, .{});
     _ = ecs.singleton_set(world, C.PlayerContainer, .{ .entity = player });
 
     const gun = ecs.new_entity(world, "Gun");
     _ = ecs.set(world, gun, C.Position, .{ .x = 0.0, .y = 0.0 });
     _ = ecs.set(world, gun, C.Renderable, .{ .color = C.Color{ .r = 0, .g = 0, .b = 255, .a = 255 } });
     _ = ecs.set(world, gun, C.Collider, .{ .box = .{ .min = .{ .x = -4, .y = -4 }, .max = .{ .x = 4, .y = 4 } } });
-    _ = ecs.set(world, gun, C.Gun, .{ .fire_rate = 0.05 });
+    _ = ecs.set(world, gun, C.Gun, .{ .fire_rate = 0.055, .recoil = 210.0 });
     _ = ecs.add_pair(world, gun, ecs.ChildOf, player);
 
     const bullets_group = ecs.new_entity(world, "Bullets");
@@ -314,14 +343,7 @@ fn spawn_initial_entities(world: *ecs.world_t, allocator: std.mem.Allocator, wid
 
     spawn_player_tail(world, player, attachments_group);
     spawn_level(world, width, height);
-    spawn_jellies(world, allocator, width);
-
-    var ground_desc = ecs.query_desc_t{};
-    ground_desc.terms[0] = .{ .id = ecs.id(C.Ground) };
-    ground_desc.terms[1] = .{ .id = ecs.id(C.Position), .inout = .In };
-    ground_desc.terms[2] = .{ .id = ecs.id(C.Collider), .inout = .In };
-    ground_desc.terms[3] = .{ .id = ecs.id(C.ExplosionParticle), .oper = .Not };
-    const ground_q = ecs.query_init(world, &ground_desc) catch unreachable;
+    spawn_jellies(world, allocator, width, height);
 
     var verlet_desc = ecs.query_desc_t{};
     verlet_desc.terms[0] = .{ .id = ecs.id(C.Position), .inout = .InOut };
@@ -360,13 +382,6 @@ fn spawn_initial_entities(world: *ecs.world_t, allocator: std.mem.Allocator, wid
     explosion_desc.terms[0] = .{ .id = ecs.id(C.ExplosionParticle) };
     const explosion_q = ecs.query_init(world, &explosion_desc) catch unreachable;
 
-    var render_ground_desc = ecs.query_desc_t{};
-    render_ground_desc.terms[0] = .{ .id = ecs.id(C.Ground) };
-    render_ground_desc.terms[1] = .{ .id = ecs.id(C.Position), .inout = .In };
-    render_ground_desc.terms[2] = .{ .id = ecs.id(C.Collider), .inout = .In };
-    render_ground_desc.terms[3] = .{ .id = ecs.id(C.Renderable), .inout = .In };
-    const render_ground_q = ecs.query_init(world, &render_ground_desc) catch unreachable;
-
     var render_actor_desc = ecs.query_desc_t{};
     render_actor_desc.terms[0] = .{ .id = ecs.id(C.Position), .inout = .In };
     render_actor_desc.terms[1] = .{ .id = ecs.id(C.Collider), .inout = .In };
@@ -376,7 +391,7 @@ fn spawn_initial_entities(world: *ecs.world_t, allocator: std.mem.Allocator, wid
     const render_actor_q = ecs.query_init(world, &render_actor_desc) catch unreachable;
 
     _ = ecs.singleton_set(world, C.PhysicsState, .{
-        .ground_query = ground_q,
+        .ground_query = null,
         .verlet_query = verlet_q,
         .player_landable_query = landable_q,
         .collider_query = collider_q,
@@ -384,7 +399,6 @@ fn spawn_initial_entities(world: *ecs.world_t, allocator: std.mem.Allocator, wid
         .reach_query = reach_q,
         .bullet_query = bullet_q,
         .explosion_query = explosion_q,
-        .render_ground_query = render_ground_q,
         .render_actor_query = render_actor_q,
     });
 
@@ -437,91 +451,100 @@ fn spawn_player_tail(world: *ecs.world_t, player: ecs.entity_t, attachments_grou
 }
 
 fn spawn_level(world: *ecs.world_t, width: usize, height: usize) void {
-    const ground_group = ecs.singleton_get(world, C.GroundGroup) orelse return;
+    _ = width;
+    _ = height;
+    const grid = C.singletonGetMutSafe(world, mw.MaterialGrid) orelse return;
+    const gw: i32 = @intCast(grid.width);
+    const gh: i32 = @intCast(grid.height);
+    if (gw < 16 or gh < 16) return;
+
+    // 1. Open sandbox room enclosure (walls, ceiling, main floor)
+    const wall_t: i32 = 4;
+    const floor_top: i32 = @max(wall_t + 8, gh - 14);
+    grid.fillCellRect(0, 0, wall_t, gh, .rock, true);
+    grid.fillCellRect(gw - wall_t, 0, gw, gh, .rock, true);
+    grid.fillCellRect(0, 0, gw, wall_t, .rock, true);
+    grid.fillCellRect(0, floor_top, gw, gh, .rock, true);
+
+    // 2. Left spawn ledge + generous Purple drink basin
+    const ledge_top = floor_top - 12;
+    const basin_rim_top = floor_top - 10;
+    grid.fillCellRect(wall_t, ledge_top, @min(46, gw - wall_t), floor_top, .rock, true);
+    grid.fillCellRect(98, basin_rim_top, 106, floor_top, .rock, true);
+    grid.fillCellRect(46, floor_top - 9, 98, floor_top, .liquid_purple, false);
+
+    // 3. Water showcase trough + exposed sand mound + destructible sand hopper above water
+    const water_rim_top = floor_top - 12;
+    grid.fillCellRect(168, water_rim_top, 176, floor_top, .rock, true);
+    grid.fillCellRect(106, floor_top - 8, 168, floor_top, .liquid_water, false);
+    grid.fillCellRect(176, floor_top - 8, 196, floor_top, .sand, false);
+
+    // Suspended destructible rock hopper holding falling sand above the water trough
+    grid.fillCellRect(124, 98, 150, 101, .rock, false);
+    grid.fillCellRect(124, 84, 126, 98, .rock, false);
+    grid.fillCellRect(148, 84, 150, 98, .rock, false);
+    grid.fillCellRect(126, 85, 148, 98, .sand, false);
+
+    // 4. Open destructible platforms & elevated arches (free-form sandbox traversal)
+    grid.fillCellRect(60, floor_top - 38, 100, floor_top - 33, .rock, false);
+    grid.fillCellRect(116, floor_top - 26, 156, floor_top - 22, .rock, false);
+    grid.fillCellRect(184, floor_top - 48, 248, floor_top - 44, .rock, false);
+    grid.fillCellRect(198, floor_top - 44, 206, floor_top - 14, .rock, false); // open doorway below (14 cells clearance)
+    grid.fillCellRect(256, floor_top - 64, 304, floor_top - 60, .rock, false);
+}
+
+fn spawn_jellies(world: *ecs.world_t, allocator: std.mem.Allocator, width: usize, height: usize) void {
+    const creatures_group = ecs.singleton_get(world, C.CreaturesGroup) orelse return;
     const w: f32 = @floatFromInt(width);
     const h: f32 = @floatFromInt(height);
-    const wall_thickness_half: f32 = 50.0;
 
-    const left_wall = ecs.new_entity(world, "LeftWall");
-    _ = ecs.set(world, left_wall, C.Position, .{ .x = -wall_thickness_half, .y = h / 2.0 });
-    _ = ecs.set(world, left_wall, C.Collider, .{ .box = .{ .min = .{ .x = -wall_thickness_half, .y = -h }, .max = .{ .x = wall_thickness_half, .y = h } } });
-    ecs.add(world, left_wall, C.Ground);
-    ecs.add_pair(world, left_wall, ecs.ChildOf, ground_group.entity);
+    // 1. 3-core kinetic jelly chain in clear open air above right-mid platform (x=736..992)
+    const c_x = std.math.clamp(w * 0.675, 220.0, w - 180.0);
+    const c_y = std.math.clamp(h * 0.34, 120.0, h - 300.0);
+    const j0 = spawn_jelly_blob(world, allocator, creatures_group.entity, c_x - 88.0, c_y + 8.0, 18.0, 40.0, 8, 0.085, null);
+    const j1 = spawn_jelly_blob(world, allocator, creatures_group.entity, c_x, c_y - 10.0, 22.0, 46.0, 8, 0.085, j0);
+    _ = spawn_jelly_blob(world, allocator, creatures_group.entity, c_x + 88.0, c_y + 8.0, 18.0, 40.0, 8, 0.085, j1);
 
-    const right_wall = ecs.new_entity(world, "RightWall");
-    _ = ecs.set(world, right_wall, C.Position, .{ .x = w + wall_thickness_half, .y = h / 2.0 });
-    _ = ecs.set(world, right_wall, C.Collider, .{ .box = .{ .min = .{ .x = -wall_thickness_half, .y = -h }, .max = .{ .x = wall_thickness_half, .y = h } } });
-    ecs.add(world, right_wall, C.Ground);
-    ecs.add_pair(world, right_wall, ecs.ChildOf, ground_group.entity);
-
-    const split_width_in_30 = w / 30.0;
-    const split_height_in_30 = h / 30.0;
-    for (0..60) |j| {
-        const i = j / 2;
-        const cx = split_width_in_30 * @as(f32, @floatFromInt(i)) + (split_width_in_30 / 2.0);
-        const cy = split_height_in_30 * @as(f32, @floatFromInt(i)) + (split_height_in_30 / 2.0);
-        spawnGroundGrid(world, cx - 5, cy - 5, 10, 10, ground_group.entity);
-    }
-
-    const floor = ecs.new_entity(world, "Floor");
-    _ = ecs.set(world, floor, C.Position, .{ .x = w / 2.0, .y = h - 50.0 });
-    _ = ecs.set(world, floor, C.Collider, .{ .box = .{ .min = .{ .x = -w / 2.0, .y = -50.0 }, .max = .{ .x = w / 2.0, .y = 50 } } });
-    _ = ecs.set(world, floor, C.Renderable, .{ .color = C.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
-    ecs.add(world, floor, C.Ground);
-    ecs.add_pair(world, floor, ecs.ChildOf, ground_group.entity);
-
-    const heat_zone = ecs.new_entity(world, "Hot Ground Effect Zone");
-    ecs.add(world, heat_zone, C.EffectZone);
-    _ = ecs.set(world, heat_zone, C.Position, .{ .x = w / 2.0, .y = h - 50.0 });
-    _ = ecs.set(world, heat_zone, C.Collider, .{ .box = .{ .min = .{ .x = -w / 2.0, .y = -100.0 }, .max = .{ .x = w / 2.0, .y = 50 } } });
-    _ = ecs.set(world, heat_zone, Effect, Effect.heat_only);
-    ecs.add_pair(world, heat_zone, ecs.ChildOf, ground_group.entity);
+    // 2. Playful 2-core connected buddy blob in the open lower-right floor area
+    const b_x = std.math.clamp(w * 0.83, 180.0, w - 130.0);
+    const b_y = std.math.clamp(h * 0.81, 140.0, h - 110.0);
+    const b0 = spawn_jelly_blob(world, allocator, creatures_group.entity, b_x - 86.0, b_y, 16.0, 36.0, 8, 0.065, null);
+    _ = spawn_jelly_blob(world, allocator, creatures_group.entity, b_x, b_y - 4.0, 18.0, 38.0, 8, 0.065, b0);
 }
 
-fn spawnGroundGrid(world: *ecs.world_t, start_x: f32, start_y: f32, width: f32, height: f32, ground_group: ecs.entity_t) void {
-    const tile_size: f32 = 5.0;
-    const cols: usize = @intFromFloat(width / tile_size);
-    const rows: usize = @intFromFloat(height / tile_size);
-
-    const grid_grouping = ecs.new_id(world);
-    ecs.add(world, grid_grouping, C.GroundGrid);
-    ecs.add_pair(world, grid_grouping, ecs.ChildOf, ground_group);
-
-    for (0..rows) |r| {
-        for (0..cols) |c_| {
-            const e = ecs.new_id(world);
-            ecs.add(world, e, C.Ground);
-
-            const tx = start_x + (@as(f32, @floatFromInt(c_)) * tile_size) + (tile_size / 2.0);
-            const ty = start_y + (@as(f32, @floatFromInt(r)) * tile_size) + (tile_size / 2.0);
-            const half = tile_size / 2.0;
-
-            _ = ecs.set(world, e, C.Position, .{ .x = tx, .y = ty });
-            _ = ecs.set(world, e, C.Collider, .{ .box = .{ .min = .{ .x = -half, .y = -half }, .max = .{ .x = half, .y = half } } });
-            _ = ecs.set(world, e, C.Renderable, .{ .color = C.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
-            ecs.add(world, e, C.Destroyable);
-            ecs.add_pair(world, e, ecs.ChildOf, grid_grouping);
-        }
-    }
+fn attachWithDist(
+    world: *ecs.world_t,
+    child: ecs.entity_t,
+    parent: ecs.entity_t,
+    dist_override: ?f32,
+    stiffness: f32,
+) void {
+    const d = dist_override orelse blk: {
+        const cp = ecs.get(world, child, C.Position).?;
+        const pp = ecs.get(world, parent, C.Position).?;
+        const dx = cp.x - pp.x;
+        const dy = cp.y - pp.y;
+        break :blk @sqrt(dx * dx + dy * dy);
+    };
+    _ = ecs.set_pair(world, child, ecs.id(C.AttachedTo), parent, C.AttachedTo, .{
+        .dist = d,
+        .stiffness = stiffness,
+    });
 }
 
-fn spawn_jellies(world: *ecs.world_t, allocator: std.mem.Allocator, width: usize) void {
-    const creatures_group = ecs.singleton_get(world, C.CreaturesGroup) orelse return;
-    const center_x = @as(f32, @floatFromInt(width)) / 2.0;
-
-    const j1 = spawn_jelly_blob(world, allocator, creatures_group.entity, center_x * 2.0 - 100.0, 150.0, 80.0, 10, null);
-    _ = spawn_jelly_blob(world, allocator, creatures_group.entity, center_x * 2.0 - 100.0 - 160.0, 150.0, 80.0, 10, &j1);
-}
-
+/// Spawn a simple kinetic jelly blob (one `PlayerLandable` center + outer skin ring),
+/// optionally tethered directly to another core with one connecting arm.
 fn spawn_jelly_blob(
     world: *ecs.world_t,
     allocator: std.mem.Allocator,
     creatures_group: ecs.entity_t,
     cx: f32,
     cy: f32,
-    radius: f32,
+    core_radius: f32,
+    skin_radius: f32,
     segments: usize,
-    connect_to: ?*const ecs.entity_t,
+    reach_stiffness: f32,
+    connect_to: ?ecs.entity_t,
 ) ecs.entity_t {
     const nodes = allocator.alloc(ecs.entity_t, segments) catch unreachable;
     defer allocator.free(nodes);
@@ -529,60 +552,48 @@ fn spawn_jelly_blob(
     const center = ecs.new_id(world);
     ecs.add(world, center, C.PlayerLandable);
     ecs.add_pair(world, center, ecs.ChildOf, creatures_group);
-
     _ = ecs.set(world, center, C.Position, .{ .x = cx, .y = cy });
     _ = ecs.set(world, center, C.VerletState, .{ .old_x = cx, .old_y = cy, .friction = 0.99 });
-    _ = ecs.set(world, center, C.Renderable, .{ .color = C.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
-    _ = ecs.set(world, center, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = radius / 2.0 } });
-    _ = ecs.set(world, center, C.PhysicsBody, .{ .restitution = 0.2, .friction = 0.8 });
+    _ = ecs.set(world, center, C.Renderable, .{ .color = C.Color{ .r = 255, .g = 35, .b = 65, .a = 255 } });
+    _ = ecs.set(world, center, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = core_radius } });
+    _ = ecs.set(world, center, C.PhysicsBody, .{ .restitution = 0.30, .friction = 0.85 });
 
     const angle_step = (std.math.pi * 2.0) / @as(f32, @floatFromInt(segments));
-    const perimeter_dist = @sqrt((radius * radius) + (radius * radius) - (2.0 * radius * radius * @cos(angle_step)));
+    const perimeter_dist = @sqrt(2.0 * skin_radius * skin_radius * (1.0 - @cos(angle_step)));
     const player = ecs.singleton_get(world, C.PlayerContainer).?.entity;
 
     for (0..segments) |i| {
         const angle = @as(f32, @floatFromInt(i)) * angle_step;
-        const px = cx + @cos(angle) * radius;
-        const py = cy + @sin(angle) * radius;
+        const px = cx + @cos(angle) * skin_radius;
+        const py = cy + @sin(angle) * skin_radius;
 
         const node = ecs.new_id(world);
         nodes[i] = node;
         ecs.add_pair(world, node, ecs.ChildOf, creatures_group);
-
         _ = ecs.set(world, node, C.Position, .{ .x = px, .y = py });
         _ = ecs.set(world, node, C.VerletState, .{ .old_x = px, .old_y = py, .friction = 0.99 });
-        _ = ecs.set(world, node, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 2.0 } });
-        _ = ecs.set(world, node, C.PhysicsBody, .{ .restitution = 0.1, .friction = 0.9 });
+        _ = ecs.set(world, node, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 2.5 } });
+        _ = ecs.set(world, node, C.PhysicsBody, .{ .restitution = 0.20, .friction = 0.90 });
         _ = ecs.set(world, node, C.Renderable, .{ .color = C.Color{ .r = 0, .g = 255, .b = 255, .a = 255 } });
 
-        _ = ecs.set_pair(world, node, ecs.id(C.ReachTowards), player, C.ReachTowards, .{
-            .stiffness = 0.1,
-        });
+        if (reach_stiffness > 0.0) {
+            _ = ecs.set_pair(world, node, ecs.id(C.ReachTowards), player, C.ReachTowards, .{
+                .stiffness = reach_stiffness,
+            });
+        }
 
-        _ = ecs.set_pair(world, node, ecs.id(C.AttachedTo), center, C.AttachedTo, .{
-            .dist = radius + (2.0 * @as(f32, @floatFromInt(i))),
-            .stiffness = 0.05,
-        });
+        // Asymmetric soft spokes create organic slosh and rotational momentum
+        attachWithDist(world, node, center, skin_radius + 2.0 * @as(f32, @floatFromInt(i)), 0.16);
     }
 
     for (0..segments) |i| {
         const current = nodes[i];
         const next = nodes[(i + 1) % segments];
-        _ = ecs.set_pair(world, current, ecs.id(C.AttachedTo), next, C.AttachedTo, .{
-            .dist = perimeter_dist,
-            .stiffness = 1.0,
-        });
+        attachWithDist(world, current, next, perimeter_dist, 0.98);
     }
 
     if (connect_to) |parent| {
-        const parent_pos = ecs.get(world, parent.*, C.Position).?;
-        const dx = cx - parent_pos.x;
-        const dy = cy - parent_pos.y;
-        const actual_dist = @sqrt(dx * dx + dy * dy);
-        _ = ecs.set_pair(world, center, ecs.id(C.AttachedTo), parent.*, C.AttachedTo, .{
-            .dist = actual_dist,
-            .stiffness = 0.1,
-        });
+        attachWithDist(world, center, parent, null, 0.22);
     }
 
     return center;
@@ -603,7 +614,7 @@ fn countWithId(world: *ecs.world_t, component_id: ecs.id_t) usize {
     return total;
 }
 
-test "reset_world clears and respawns jellies, bullets, tail, and ground without leaks" {
+test "reset_world clears and respawns multi-core blobs, bullets, tail, MaterialGrid, and reservoir without leaks" {
     const testing = std.testing;
     const world = ecs.init();
     defer _ = ecs.fini(world);
@@ -612,15 +623,27 @@ test "reset_world clears and respawns jellies, bullets, tail, and ground without
     register_components(world);
     register_systems(world);
 
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
-    try spawn_initial_entities(world, arena.allocator(), 640, 360);
+    try spawn_initial_entities(world, testing.allocator, 1280, 720);
 
     const initial_verlets = countWithId(world, ecs.id(C.VerletState));
-    const initial_ground = countWithId(world, ecs.id(C.Ground));
+    const initial_cores = countWithId(world, ecs.id(C.PlayerLandable));
+    try testing.expectEqual(@as(usize, 5), initial_cores); // 3-core chain + 2-core buddy
+    try testing.expectEqual(@as(usize, 0), countWithId(world, ecs.id(C.Ground)));
 
-    // Spawn a bullet and modify gun cooldown to verify reset clears them
+    const grid_before = ecs.singleton_get(world, mw.MaterialGrid).?;
+    try testing.expectEqual(@as(usize, 320), grid_before.width);
+    try testing.expectEqual(@as(usize, 180), grid_before.height);
+    const counts_before = grid_before.countByMaterial();
+    try testing.expect(counts_before.rock_cells > 0);
+    try testing.expect(counts_before.sand_cells > 0);
+    try testing.expect(counts_before.liquid_purple_cells > 0);
+    try testing.expect(counts_before.liquid_water_cells > 0);
+
+    // Mutate player reservoir, grid rock, bullet, and gun cooldown before reset
+    const player = ecs.singleton_get(world, C.PlayerContainer).?.entity;
+    _ = ecs.get_mut(world, player, C.LiquidReservoir).?.addLiquid(.purple, 20);
+    _ = ecs.singleton_get_mut(world, mw.MaterialGrid).?.carveCircle(300.0, 520.0, 20.0);
+
     const bullets_group = ecs.singleton_get(world, C.BulletsGroup).?.entity;
     const bullet = ecs.new_id(world);
     ecs.add(world, bullet, C.Bullet);
@@ -632,20 +655,22 @@ test "reset_world clears and respawns jellies, bullets, tail, and ground without
 
     var sky: [16]u32 = @splat(0x11111111);
     var bg: [16]u32 = @splat(0x22222222);
-    reset_world(world, arena.allocator(), 640, 360, &sky, &bg);
+    reset_world(world, testing.allocator, 1280, 720, &sky, &bg);
 
     try testing.expectEqual(@as(usize, 0), countWithId(world, ecs.id(C.Bullet)));
     try testing.expectEqual(initial_verlets, countWithId(world, ecs.id(C.VerletState)));
-    try testing.expectEqual(initial_ground, countWithId(world, ecs.id(C.Ground)));
+    try testing.expectEqual(initial_cores, countWithId(world, ecs.id(C.PlayerLandable)));
     try testing.expectEqual(@as(f32, 0.0), ecs.get(world, gun, C.Gun).?.cooldown);
+    try testing.expectEqual(@as(u32, 0), ecs.get(world, player, C.LiquidReservoir).?.amount);
     try testing.expectEqual(@as(u32, 0x11111111), bg[0]);
+    try testing.expectEqual(counts_before.rock_cells, ecs.singleton_get(world, mw.MaterialGrid).?.countByMaterial().rock_cells);
 
     // Verify Verlet entities do not have Velocity component and only Player has Velocity
     try testing.expectEqual(@as(usize, 1), countWithId(world, ecs.id(C.Velocity)));
 
-    // Step full PBD solver across initial world and again after reset_world
+    // Step full PBD solver across reset world
     for (0..10) |_| {
-        systems.verlet.stepVerletPBDWithAllocator(world, arena.allocator(), 1.0 / 120.0);
+        systems.verlet.stepVerletPBDWithAllocator(world, testing.allocator, 1.0 / 120.0);
     }
     const metrics = ecs.singleton_get(world, C.FrameMetrics).?;
     try testing.expect(metrics.verlet_ground_checks > 0);
@@ -712,4 +737,131 @@ test "sim and render pipelines separate OnUpdate from OnStore and PostFrame" {
     try testing.expectEqual(@as(u32, 3), c.update_runs);
     try testing.expectEqual(@as(u32, 2), c.store_runs);
     try testing.expectEqual(@as(u32, 2), c.post_frame_runs);
+}
+
+test "sandbox SimPipeline runs multi-step frame: drink purple, refill key helper, carve rock, and push multi-core blobs" {
+    const testing = std.testing;
+    const world = ecs.init();
+    defer _ = ecs.fini(world);
+    defer deinit(world);
+
+    register_components(world);
+    register_systems(world);
+    try spawn_initial_entities(world, testing.allocator, 1280, 720);
+
+    _ = ecs.singleton_set(world, input_mod.InputState, .{});
+    const pipelines = ecs.singleton_get(world, C.GamePipelines).?.*;
+    const player = ecs.singleton_get(world, C.PlayerContainer).?.entity;
+    const fixed_dt: f32 = 1.0 / 120.0;
+
+    // 1. Place player in purple drink basin (gx=46..98, gy=162 -> world x=260, y=645) and step 2x/frame
+    _ = ecs.set(world, player, C.Position, .{ .x = 260.0, .y = 645.0 });
+    _ = ecs.singleton_set(world, C.AimTarget, .{ .x = 260.0, .y = 700.0 });
+    for (0..8) |_| {
+        _ = ecs.frame_begin(world, fixed_dt * 2.0);
+        ecs.run_pipeline(world, pipelines.sim, fixed_dt);
+        ecs.run_pipeline(world, pipelines.sim, fixed_dt);
+        ecs.frame_end(world);
+    }
+
+    const res_after_drink = ecs.get(world, player, C.LiquidReservoir).?;
+    try testing.expect(res_after_drink.amount > 0);
+    try testing.expect(res_after_drink.has_drunk_once);
+    try testing.expect(res_after_drink.hasAmmo());
+
+    // 2. Quick-refill helper fills reservoir to capacity
+    refill_player_liquid(world);
+    const res_refilled = ecs.get(world, player, C.LiquidReservoir).?;
+    try testing.expectEqual(res_refilled.capacity, res_refilled.amount);
+
+    // 3. Shoot destructible left-mid platform (gx=60..100, gy=128..133 -> x=320, y=520)
+    _ = ecs.set(world, player, C.Position, .{ .x = 220.0, .y = 520.0 });
+    _ = ecs.set(world, player, C.Velocity, .{ .x = 0.0, .y = 0.0 });
+    _ = ecs.singleton_set(world, C.AimTarget, .{ .x = 320.0, .y = 520.0 });
+    _ = ecs.singleton_set(world, input_mod.InputState, .{ .is_pressing = true });
+
+    for (0..18) |_| {
+        _ = ecs.frame_begin(world, fixed_dt * 2.0);
+        ecs.run_pipeline(world, pipelines.sim, fixed_dt);
+        ecs.run_pipeline(world, pipelines.sim, fixed_dt);
+        ecs.frame_end(world);
+    }
+
+    const mg = ecs.singleton_get(world, mw.MaterialGrid).?;
+    try testing.expect(mg.getCell(62, 130).?.material != .rock);
+    try testing.expectEqual(@as(usize, 5), countWithId(world, ecs.id(C.PlayerLandable)));
+
+    // 4. Step full simulation for 240 ticks (2 full seconds) and verify all creature nodes stay
+    //    contained inside the room and remain structurally inflated (no collapse or fly-away).
+    _ = ecs.singleton_set(world, input_mod.InputState, .{});
+    for (0..120) |_| {
+        _ = ecs.frame_begin(world, fixed_dt * 2.0);
+        ecs.run_pipeline(world, pipelines.sim, fixed_dt);
+        ecs.run_pipeline(world, pipelines.sim, fixed_dt);
+        ecs.frame_end(world);
+    }
+
+    const creatures_group = ecs.singleton_get(world, C.CreaturesGroup).?.entity;
+    const landable_id = ecs.id(C.PlayerLandable);
+    const attached_id = ecs.id(C.AttachedTo);
+    var core_ids: [5]ecs.entity_t = @splat(0);
+    var blob_min_y: [5]f32 = @splat(10000.0);
+    var blob_max_y: [5]f32 = @splat(-10000.0);
+    var core_count: usize = 0;
+    var core_arms: usize = 0;
+
+    var v_it = ecs.query_iter(world, ecs.singleton_get(world, C.PhysicsState).?.verlet_query);
+    while (ecs.query_next(&v_it)) {
+        const positions = ecs.field(&v_it, C.Position, 0).?;
+        const ents = v_it.entities();
+        for (positions, 0..) |p, idx| {
+            const e = ents[idx];
+            try testing.expect(std.math.isFinite(p.x) and std.math.isFinite(p.y));
+            try testing.expect(p.x >= 0.0 and p.x <= 1280.0);
+            try testing.expect(p.y >= 0.0 and p.y <= 720.0);
+            if (!ecs.has_pair(world, e, ecs.ChildOf, creatures_group)) continue;
+            if (ecs.has_id(world, e, landable_id)) {
+                try testing.expect(core_count < core_ids.len);
+                core_ids[core_count] = e;
+                blob_min_y[core_count] = @min(blob_min_y[core_count], p.y);
+                blob_max_y[core_count] = @max(blob_max_y[core_count], p.y);
+                core_count += 1;
+                try testing.expect(p.y > 16.0 and p.y < 680.0);
+                if (ecs.get_target(world, e, attached_id, 0) != 0) {
+                    core_arms += 1;
+                }
+            }
+        }
+    }
+    try testing.expectEqual(@as(usize, 5), core_count);
+    try testing.expectEqual(@as(usize, 3), core_arms); // 2 arms in 3-core chain + 1 arm in 2-core buddy
+
+    var v_it2 = ecs.query_iter(world, ecs.singleton_get(world, C.PhysicsState).?.verlet_query);
+    while (ecs.query_next(&v_it2)) {
+        const positions = ecs.field(&v_it2, C.Position, 0).?;
+        const ents = v_it2.entities();
+        for (positions, 0..) |p, idx| {
+            const e = ents[idx];
+            if (!ecs.has_pair(world, e, ecs.ChildOf, creatures_group)) continue;
+            if (ecs.has_id(world, e, landable_id)) continue;
+
+            var t_idx: i32 = 0;
+            while (t_idx < 4) : (t_idx += 1) {
+                const raw_target = ecs.get_target(world, e, attached_id, t_idx);
+                if (raw_target == 0) break;
+                const target = ecs.get_alive(world, raw_target);
+                for (core_ids, 0..) |cid, c_idx| {
+                    if (target == cid) {
+                        if (p.y < blob_min_y[c_idx]) blob_min_y[c_idx] = p.y;
+                        if (p.y > blob_max_y[c_idx]) blob_max_y[c_idx] = p.y;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    for (0..core_count) |c_idx| {
+        try testing.expect((blob_max_y[c_idx] - blob_min_y[c_idx]) > 40.0);
+    }
 }

@@ -627,19 +627,125 @@ pub fn drawCursor(engine: *Engine, mx: i32, my: i32, size: i32, color: u32) void
     }
 }
 
-pub fn restoreRect(engine: *Engine, x: i32, y: i32, w: usize, h: usize) void {
-    const bounds = clipRect(engine.width, engine.height, x, y, w, h) orelse return;
-    const span = bounds.end_x - bounds.start_x;
+/// Draw a 1px outline rectangle into the pixel buffer (clipped safely).
+pub fn drawRectOutline(engine: *Engine, x: i32, y: i32, w: usize, h: usize, color: u32) void {
+    if (w == 0 or h == 0) return;
+    drawRectInBuffers(engine.pixel_buffer, engine.effect_buffer, engine.width, engine.height, x, y, w, 1, color, Effect.none);
+    drawRectInBuffers(engine.pixel_buffer, engine.effect_buffer, engine.width, engine.height, x, y + @as(i32, @intCast(h - 1)), w, 1, color, Effect.none);
+    drawRectInBuffers(engine.pixel_buffer, engine.effect_buffer, engine.width, engine.height, x, y, 1, h, color, Effect.none);
+    drawRectInBuffers(engine.pixel_buffer, engine.effect_buffer, engine.width, engine.height, x + @as(i32, @intCast(w - 1)), y, 1, h, color, Effect.none);
+}
 
-    for (bounds.start_y..bounds.end_y) |cy| {
-        const row_start = cy * engine.width + bounds.start_x;
-        const row_end = row_start + span;
+fn glyphRows(ch_raw: u8) [7]u5 {
+    const ch = std.ascii.toUpper(ch_raw);
+    return switch (ch) {
+        'A' => .{ 0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001 },
+        'B' => .{ 0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110 },
+        'C' => .{ 0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110 },
+        'D' => .{ 0b11100, 0b10010, 0b10001, 0b10001, 0b10001, 0b10010, 0b11100 },
+        'E' => .{ 0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111 },
+        'F' => .{ 0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000 },
+        'G' => .{ 0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110 },
+        'H' => .{ 0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001 },
+        'I' => .{ 0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110 },
+        'J' => .{ 0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100 },
+        'K' => .{ 0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001 },
+        'L' => .{ 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111 },
+        'M' => .{ 0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001 },
+        'N' => .{ 0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001 },
+        'O' => .{ 0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110 },
+        'P' => .{ 0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000 },
+        'Q' => .{ 0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101 },
+        'R' => .{ 0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001 },
+        'S' => .{ 0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110 },
+        'T' => .{ 0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100 },
+        'U' => .{ 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110 },
+        'V' => .{ 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100 },
+        'W' => .{ 0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001 },
+        'X' => .{ 0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001 },
+        'Y' => .{ 0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100 },
+        'Z' => .{ 0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111 },
+        '0' => .{ 0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110 },
+        '1' => .{ 0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110 },
+        '2' => .{ 0b01110, 0b10001, 0b00001, 0b00110, 0b01000, 0b10000, 0b11111 },
+        '3' => .{ 0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110 },
+        '4' => .{ 0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010 },
+        '5' => .{ 0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110 },
+        '6' => .{ 0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110 },
+        '7' => .{ 0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000 },
+        '8' => .{ 0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110 },
+        '9' => .{ 0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110 },
+        '-' => .{ 0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000 },
+        '/' => .{ 0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000 },
+        ':' => .{ 0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000 },
+        '!' => .{ 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100 },
+        '.' => .{ 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b00100 },
+        '=' => .{ 0b00000, 0b00000, 0b11111, 0b00000, 0b11111, 0b00000, 0b00000 },
+        '(' => .{ 0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010 },
+        ')' => .{ 0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000 },
+        '&' => .{ 0b01100, 0b10010, 0b10100, 0b01000, 0b10101, 0b10010, 0b01101 },
+        else => .{ 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000 },
+    };
+}
 
-        const sky_slice = engine.sky_buffer[row_start..row_end];
-        @memcpy(engine.background_buffer[row_start..row_end], sky_slice);
-        @memcpy(engine.pixel_buffer[row_start..row_end], sky_slice);
-        @memset(engine.effect_buffer[row_start..row_end], @as(u16, 0));
+/// Draw scaled 5x7 uppercase bitmap text directly into a raw pixel buffer (clipped safely).
+pub fn drawPixelTextInBuffer(
+    pixel_buffer: []u32,
+    buf_width: usize,
+    buf_height: usize,
+    x: i32,
+    y: i32,
+    scale: usize,
+    text: []const u8,
+    color: u32,
+) void {
+    if (scale == 0 or buf_width == 0 or buf_height == 0) return;
+    const s: i32 = @intCast(scale);
+    const bw: i32 = @intCast(buf_width);
+    const bh: i32 = @intCast(buf_height);
+    var cursor_x = x;
+
+    for (text) |ch| {
+        const rows = glyphRows(ch);
+        for (rows, 0..) |row_bits, ry| {
+            var rx: usize = 0;
+            while (rx < 5) : (rx += 1) {
+                const bit: u5 = @as(u5, 1) << @intCast(4 - rx);
+                if ((row_bits & bit) == 0) continue;
+
+                const px0 = cursor_x + @as(i32, @intCast(rx)) * s;
+                const py0 = y + @as(i32, @intCast(ry)) * s;
+                const x_start = @max(0, px0);
+                const y_start = @max(0, py0);
+                const x_end = @min(bw, px0 + s);
+                const y_end = @min(bh, py0 + s);
+                if (x_end <= x_start or y_end <= y_start) continue;
+
+                var py = y_start;
+                while (py < y_end) : (py += 1) {
+                    const row_base = @as(usize, @intCast(py)) * buf_width;
+                    const ux0: usize = @intCast(x_start);
+                    const ux1: usize = @intCast(x_end);
+                    if (ux1 - ux0 <= 4) {
+                        for (ux0..ux1) |px| {
+                            pixel_buffer[row_base + px] = color;
+                        }
+                    } else {
+                        @memset(pixel_buffer[row_base + ux0 .. row_base + ux1], color);
+                    }
+                }
+            }
+        }
+        cursor_x += 6 * s;
     }
+}
+
+/// Draw scaled 5x7 bitmap text with a 1px dark drop shadow into the engine pixel buffer.
+pub fn drawPixelText(engine: *Engine, x: i32, y: i32, scale: usize, text: []const u8, color: u32) void {
+    const shadow = packColor(12, 12, 18, 255);
+    const offset: i32 = @intCast(@max(@as(usize, 1), scale));
+    drawPixelTextInBuffer(engine.pixel_buffer, engine.width, engine.height, x + offset, y + offset, scale, text, shadow);
+    drawPixelTextInBuffer(engine.pixel_buffer, engine.width, engine.height, x, y, scale, text, color);
 }
 
 test "packColor packs RGBA in little-endian ABGR order" {
@@ -780,4 +886,17 @@ test "drawTriangleFilledAlphaInBuffers blends without panics or out-of-bounds" {
     // Non-finite/off-screen is safe
     drawTriangleFilledAlphaInBuffers(&pixels, 8, 8, -20.0, -20.0, -10.0, -5.0, -5.0, -15.0, fill);
     drawTriangleFilledAlphaInBuffers(&pixels, 8, 8, std.math.nan(f32), 0.0, 2.0, 2.0, 0.0, 2.0, fill);
+}
+
+test "drawPixelTextInBuffer renders glyphs and clips safely at boundaries" {
+    const testing = std.testing;
+    var pixels: [24 * 16]u32 = @splat(0);
+    const white = packColor(255, 255, 255, 255);
+
+    // Draw "A!" partially clipped off bottom-right
+    drawPixelTextInBuffer(&pixels, 24, 16, 2, 2, 1, "A!", white);
+    // 'A' top row is 0b01110 -> center pixel at (2+2, 2) = (4, 2) must be white
+    try testing.expectEqual(white, pixels[2 * 24 + 4]);
+    // Clipping test: out-of-bounds text does not crash
+    drawPixelTextInBuffer(&pixels, 24, 16, -4, -3, 2, "CLEAR!", white);
 }
