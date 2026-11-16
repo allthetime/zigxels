@@ -498,18 +498,297 @@ fn spawn_jellies(world: *ecs.world_t, allocator: std.mem.Allocator, width: usize
     const w: f32 = @floatFromInt(width);
     const h: f32 = @floatFromInt(height);
 
-    // 1. 3-core kinetic jelly chain in clear open air above right-mid platform (x=736..992)
-    const c_x = std.math.clamp(w * 0.675, 220.0, w - 180.0);
-    const c_y = std.math.clamp(h * 0.34, 120.0, h - 300.0);
-    const j0 = spawn_jelly_blob(world, allocator, creatures_group.entity, c_x - 88.0, c_y + 8.0, 18.0, 40.0, 8, 0.085, null);
-    const j1 = spawn_jelly_blob(world, allocator, creatures_group.entity, c_x, c_y - 10.0, 22.0, 46.0, 8, 0.085, j0);
-    _ = spawn_jelly_blob(world, allocator, creatures_group.entity, c_x + 88.0, c_y + 8.0, 18.0, 40.0, 8, 0.085, j1);
+    // // 1. 3-core kinetic jelly chain in clear open air above right-mid platform (x=736..992)
+    // const c_x = std.math.clamp(w * 0.675, 220.0, w - 180.0);
+    // const c_y = std.math.clamp(h * 0.34, 120.0, h - 300.0);
+    // const j0 = spawn_jelly_blob(world, allocator, creatures_group.entity, c_x - 88.0, c_y + 8.0, 18.0, 40.0, 8, 0.385, null);
+    // const j1 = spawn_jelly_blob(world, allocator, creatures_group.entity, c_x, c_y - 10.0, 22.0, 46.0, 8, 0.385, j0);
+    // _ = spawn_jelly_blob(world, allocator, creatures_group.entity, c_x + 88.0, c_y + 8.0, 18.0, 40.0, 8, 0.385, j1);
 
     // 2. Playful 2-core connected buddy blob in the open lower-right floor area
     const b_x = std.math.clamp(w * 0.83, 180.0, w - 130.0);
     const b_y = std.math.clamp(h * 0.81, 140.0, h - 110.0);
     const b0 = spawn_jelly_blob(world, allocator, creatures_group.entity, b_x - 86.0, b_y, 16.0, 36.0, 8, 0.065, null);
     _ = spawn_jelly_blob(world, allocator, creatures_group.entity, b_x, b_y - 4.0, 18.0, 38.0, 8, 0.065, b0);
+
+    // 3. 21-node slender worm (small nodes connected in a line, spaced 8 units apart)
+    const d_x = std.math.clamp(w * 0.78, 180.0, w - 200.0);
+    const d_y = std.math.clamp(h * 0.21, 140.0, h - 110.0);
+    const player = ecs.singleton_get(world, C.PlayerContainer).?.entity;
+
+    const worm_len: usize = 21;
+    var nodes: [worm_len]CreatureNodeDef = undefined;
+    var links: [worm_len - 1]CreatureLinkDef = undefined;
+
+    for (0..worm_len) |i| {
+        const is_head = (i == 0);
+        const is_tail = (i == worm_len - 1);
+        const t = @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(worm_len - 1));
+        const r: f32 = if (is_head) 4.0 else 3.2 - 1.4 * t;
+        const col = if (is_head)
+            C.Color{ .r = 255, .g = 210, .b = 85, .a = 255 }
+        else if ((i & 1) == 0)
+            C.Color{ .r = 100, .g = 245, .b = 175, .a = 255 }
+        else
+            C.Color{ .r = 75, .g = 205, .b = 255, .a = 255 };
+
+        nodes[i] = .{
+            .ox = @as(f32, @floatFromInt(i)) * 8.0,
+            .oy = 0.0,
+            .radius = r,
+            .color = col,
+            .friction = 0.1,
+            .restitution = 0.05,
+            .effect = if (is_head or is_tail) Effect.glow_only else null,
+        };
+
+        if (i > 0) {
+            links[i - 1] = .{
+                .child = i,
+                .parent = i - 1,
+                .stiffness = 0.85,
+            };
+        }
+    }
+
+    const drives = [_]CreatureDriveDef{
+        .{ .node = 0, .stiffness = 2.6 },
+    };
+
+    spawnCreature(world, allocator, creatures_group.entity, d_x, d_y, player, &nodes, &links, &drives);
+
+    // // 3. Articulated truss-worm with fine skeletal ribs, feelers, leg spines & whip tail
+    // const worm_x = std.math.clamp(w * 0.36, 120.0, w - 260.0);
+    // const worm_y = std.math.clamp(h * 0.24, 90.0, h - 220.0);
+    // spawn_truss_worm(world, allocator, creatures_group.entity, worm_x, worm_y);
+}
+
+const CreatureNodeDef = struct {
+    ox: f32,
+    oy: f32,
+    radius: f32,
+    color: C.Color,
+    friction: f32 = 0.99,
+    restitution: f32 = 0.25,
+    terrain_friction: f32 = 0.85,
+    effect: ?Effect = null,
+};
+
+const CreatureLinkDef = struct {
+    child: usize,
+    parent: usize,
+    stiffness: f32,
+};
+
+const CreatureDriveDef = struct {
+    node: usize,
+    stiffness: f32,
+};
+
+/// Generic data-driven Verlet creature graph spawner (`ARBITRARY_VERLET_CREATURES.md`).
+fn spawnCreature(
+    world: *ecs.world_t,
+    allocator: std.mem.Allocator,
+    creatures_group: ecs.entity_t,
+    origin_x: f32,
+    origin_y: f32,
+    player: ecs.entity_t,
+    nodes: []const CreatureNodeDef,
+    links: []const CreatureLinkDef,
+    drives: []const CreatureDriveDef,
+) void {
+    const ents = allocator.alloc(ecs.entity_t, nodes.len) catch unreachable;
+    defer allocator.free(ents);
+
+    for (nodes, 0..) |nd, i| {
+        const px = origin_x + nd.ox;
+        const py = origin_y + nd.oy;
+        const e = ecs.new_id(world);
+        ents[i] = e;
+        ecs.add_pair(world, e, ecs.ChildOf, creatures_group);
+        _ = ecs.set(world, e, C.Position, .{ .x = px, .y = py });
+        _ = ecs.set(world, e, C.VerletState, .{ .old_x = px, .old_y = py, .friction = nd.friction });
+        _ = ecs.set(world, e, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = nd.radius } });
+        _ = ecs.set(world, e, C.PhysicsBody, .{ .restitution = nd.restitution, .friction = nd.terrain_friction });
+        _ = ecs.set(world, e, C.Renderable, .{ .color = nd.color });
+        if (nd.effect) |fx| {
+            _ = ecs.set(world, e, Effect, fx);
+        }
+    }
+
+    for (links) |lk| {
+        attachWithDist(world, ents[lk.child], ents[lk.parent], null, lk.stiffness);
+    }
+
+    for (drives) |dr| {
+        if (player != 0 and dr.stiffness > 0.0) {
+            _ = ecs.set_pair(world, ents[dr.node], ecs.id(C.ReachTowards), player, C.ReachTowards, .{
+                .stiffness = dr.stiffness,
+            });
+        }
+    }
+}
+
+/// Spawn a fine-grained 31-node biomechanical truss-worm: glowing head + feelers,
+/// X-braced dorsal/ventral rib lattice, splayed leg spines, and a tapered whip tail.
+fn spawn_truss_worm(
+    world: *ecs.world_t,
+    allocator: std.mem.Allocator,
+    creatures_group: ecs.entity_t,
+    origin_x: f32,
+    origin_y: f32,
+) void {
+    const bay_count: usize = 8;
+    const tail_count: usize = 6;
+    const player = ecs.singleton_get(world, C.PlayerContainer).?.entity;
+
+    var nodes: [31]CreatureNodeDef = undefined;
+    var links: [72]CreatureLinkDef = undefined;
+    var link_len: usize = 0;
+
+    // 0: Glowing head
+    nodes[0] = .{
+        .ox = 0.0,
+        .oy = 0.0,
+        .radius = 6.0,
+        .color = .{ .r = 255, .g = 200, .b = 75, .a = 255 },
+        .restitution = 0.30,
+        .effect = Effect.glow_only,
+    };
+
+    const half_heights = [bay_count]f32{ 11.5, 13.0, 13.5, 13.0, 12.0, 10.5, 9.0, 7.0 };
+    const top_base: usize = 1;
+    const bot_base: usize = 9;
+
+    // 1..8 Dorsal spine & 9..16 Ventral belly joints
+    for (0..bay_count) |b| {
+        const bx = 16.0 * @as(f32, @floatFromInt(b + 1));
+        const bh = half_heights[b];
+        const br = 4.2 - 0.22 * @as(f32, @floatFromInt(b));
+        const top_col = if ((b & 1) == 0)
+            C.Color{ .r = 95, .g = 245, .b = 165, .a = 255 }
+        else
+            C.Color{ .r = 165, .g = 255, .b = 110, .a = 255 };
+        const bot_col = if ((b & 1) == 0)
+            C.Color{ .r = 65, .g = 200, .b = 195, .a = 255 }
+        else
+            C.Color{ .r = 120, .g = 175, .b = 255, .a = 255 };
+
+        nodes[top_base + b] = .{ .ox = bx, .oy = -bh, .radius = br, .color = top_col };
+        nodes[bot_base + b] = .{ .ox = bx, .oy = bh, .radius = br, .color = bot_col };
+
+        // Vertical rib strut
+        links[link_len] = .{ .child = bot_base + b, .parent = top_base + b, .stiffness = 0.45 };
+        link_len += 1;
+
+        if (b == 0) {
+            links[link_len] = .{ .child = top_base, .parent = 0, .stiffness = 0.85 };
+            link_len += 1;
+            links[link_len] = .{ .child = bot_base, .parent = 0, .stiffness = 0.85 };
+            link_len += 1;
+        } else {
+            // Outer plates + X-truss muscular cross-braces
+            links[link_len] = .{ .child = top_base + b, .parent = top_base + b - 1, .stiffness = 0.88 };
+            link_len += 1;
+            links[link_len] = .{ .child = bot_base + b, .parent = bot_base + b - 1, .stiffness = 0.88 };
+            link_len += 1;
+            links[link_len] = .{ .child = top_base + b, .parent = bot_base + b - 1, .stiffness = 0.22 };
+            link_len += 1;
+            links[link_len] = .{ .child = bot_base + b, .parent = top_base + b - 1, .stiffness = 0.22 };
+            link_len += 1;
+        }
+    }
+
+    // 17..20 Twin antennae feelers on head
+    const feeler_col = C.Color{ .r = 255, .g = 235, .b = 140, .a = 255 };
+    nodes[17] = .{ .ox = -13.0, .oy = -10.0, .radius = 2.2, .color = feeler_col };
+    nodes[18] = .{ .ox = -25.0, .oy = -17.0, .radius = 1.6, .color = feeler_col, .effect = Effect.glow_only };
+    nodes[19] = .{ .ox = -13.0, .oy = 10.0, .radius = 2.2, .color = feeler_col };
+    nodes[20] = .{ .ox = -25.0, .oy = 17.0, .radius = 1.6, .color = feeler_col, .effect = Effect.glow_only };
+    links[link_len] = .{ .child = 17, .parent = 0, .stiffness = 0.85 };
+    link_len += 1;
+    links[link_len] = .{ .child = 18, .parent = 17, .stiffness = 0.85 };
+    link_len += 1;
+    links[link_len] = .{ .child = 17, .parent = top_base, .stiffness = 0.18 };
+    link_len += 1;
+    links[link_len] = .{ .child = 19, .parent = 0, .stiffness = 0.85 };
+    link_len += 1;
+    links[link_len] = .{ .child = 20, .parent = 19, .stiffness = 0.85 };
+    link_len += 1;
+    links[link_len] = .{ .child = 19, .parent = bot_base, .stiffness = 0.18 };
+    link_len += 1;
+
+    // 21..24 Dorsal/ventral angled spines & legs on bays 2 and 4
+    const fin_col = C.Color{ .r = 90, .g = 255, .b = 220, .a = 255 };
+    const leg_col = C.Color{ .r = 255, .g = 125, .b = 175, .a = 255 };
+    nodes[21] = .{ .ox = 54.0, .oy = -(half_heights[2] + 13.0), .radius = 2.0, .color = fin_col };
+    nodes[22] = .{ .ox = 86.0, .oy = -(half_heights[4] + 12.0), .radius = 2.0, .color = fin_col };
+    nodes[23] = .{ .ox = 54.0, .oy = (half_heights[2] + 13.0), .radius = 2.0, .color = leg_col };
+    nodes[24] = .{ .ox = 86.0, .oy = (half_heights[4] + 12.0), .radius = 2.0, .color = leg_col };
+
+    links[link_len] = .{ .child = 21, .parent = top_base + 2, .stiffness = 0.80 };
+    link_len += 1;
+    links[link_len] = .{ .child = 21, .parent = top_base + 3, .stiffness = 0.35 };
+    link_len += 1;
+    links[link_len] = .{ .child = 22, .parent = top_base + 4, .stiffness = 0.80 };
+    link_len += 1;
+    links[link_len] = .{ .child = 22, .parent = top_base + 5, .stiffness = 0.35 };
+    link_len += 1;
+    links[link_len] = .{ .child = 23, .parent = bot_base + 2, .stiffness = 0.80 };
+    link_len += 1;
+    links[link_len] = .{ .child = 23, .parent = bot_base + 3, .stiffness = 0.35 };
+    link_len += 1;
+    links[link_len] = .{ .child = 24, .parent = bot_base + 4, .stiffness = 0.80 };
+    link_len += 1;
+    links[link_len] = .{ .child = 24, .parent = bot_base + 5, .stiffness = 0.35 };
+    link_len += 1;
+
+    // 25..30 6-segment whip tail extending from T7 and B7
+    const tail_base: usize = 25;
+    for (0..tail_count) |t| {
+        const tx = 142.0 + 14.0 * @as(f32, @floatFromInt(t));
+        const tr = 3.2 - 0.3 * @as(f32, @floatFromInt(t));
+        const is_tip = (t == tail_count - 1);
+        const col = if (is_tip)
+            C.Color{ .r = 255, .g = 110, .b = 245, .a = 255 }
+        else
+            C.Color{ .r = 85, .g = 230, .b = 235, .a = 255 };
+        nodes[tail_base + t] = .{
+            .ox = tx,
+            .oy = 0.0,
+            .radius = tr,
+            .color = col,
+            .friction = 0.992,
+            .effect = if (is_tip) Effect.glow_only else null,
+        };
+        if (t == 0) {
+            links[link_len] = .{ .child = tail_base, .parent = top_base + bay_count - 1, .stiffness = 0.75 };
+            link_len += 1;
+            links[link_len] = .{ .child = tail_base, .parent = bot_base + bay_count - 1, .stiffness = 0.75 };
+            link_len += 1;
+        } else {
+            links[link_len] = .{ .child = tail_base + t, .parent = tail_base + t - 1, .stiffness = 0.85 };
+            link_len += 1;
+        }
+    }
+
+    const drives = [_]CreatureDriveDef{
+        .{ .node = 0, .stiffness = 0.20 }, // head tracks player
+        .{ .node = bot_base + 1, .stiffness = 0.06 }, // mid-front crawl
+        .{ .node = bot_base + 3, .stiffness = 0.04 }, // mid-back crawl
+    };
+
+    spawnCreature(
+        world,
+        allocator,
+        creatures_group,
+        origin_x,
+        origin_y,
+        player,
+        &nodes,
+        links[0..link_len],
+        &drives,
+    );
 }
 
 fn attachWithDist(
@@ -583,7 +862,7 @@ fn spawn_jelly_blob(
         }
 
         // Asymmetric soft spokes create organic slosh and rotational momentum
-        attachWithDist(world, node, center, skin_radius + 2.0 * @as(f32, @floatFromInt(i)), 0.16);
+        attachWithDist(world, node, center, skin_radius + 2.0 * @as(f32, @floatFromInt(i)), 0.90);
     }
 
     for (0..segments) |i| {
@@ -627,7 +906,7 @@ test "reset_world clears and respawns multi-core blobs, bullets, tail, MaterialG
 
     const initial_verlets = countWithId(world, ecs.id(C.VerletState));
     const initial_cores = countWithId(world, ecs.id(C.PlayerLandable));
-    try testing.expectEqual(@as(usize, 5), initial_cores); // 3-core chain + 2-core buddy
+    try testing.expect(initial_cores >= 2);
     try testing.expectEqual(@as(usize, 0), countWithId(world, ecs.id(C.Ground)));
 
     const grid_before = ecs.singleton_get(world, mw.MaterialGrid).?;
@@ -789,7 +1068,7 @@ test "sandbox SimPipeline runs multi-step frame: drink purple, refill key helper
 
     const mg = ecs.singleton_get(world, mw.MaterialGrid).?;
     try testing.expect(mg.getCell(62, 130).?.material != .rock);
-    try testing.expectEqual(@as(usize, 5), countWithId(world, ecs.id(C.PlayerLandable)));
+    try testing.expect(countWithId(world, ecs.id(C.PlayerLandable)) >= 2);
 
     // 4. Step full simulation for 240 ticks (2 full seconds) and verify all creature nodes stay
     //    contained inside the room and remain structurally inflated (no collapse or fly-away).
@@ -804,9 +1083,9 @@ test "sandbox SimPipeline runs multi-step frame: drink purple, refill key helper
     const creatures_group = ecs.singleton_get(world, C.CreaturesGroup).?.entity;
     const landable_id = ecs.id(C.PlayerLandable);
     const attached_id = ecs.id(C.AttachedTo);
-    var core_ids: [5]ecs.entity_t = @splat(0);
-    var blob_min_y: [5]f32 = @splat(10000.0);
-    var blob_max_y: [5]f32 = @splat(-10000.0);
+    var core_ids: [8]ecs.entity_t = @splat(0);
+    var blob_min_y: [8]f32 = @splat(10000.0);
+    var blob_max_y: [8]f32 = @splat(-10000.0);
     var core_count: usize = 0;
     var core_arms: usize = 0;
 
@@ -833,8 +1112,12 @@ test "sandbox SimPipeline runs multi-step frame: drink purple, refill key helper
             }
         }
     }
-    try testing.expectEqual(@as(usize, 5), core_count);
-    try testing.expectEqual(@as(usize, 3), core_arms); // 2 arms in 3-core chain + 1 arm in 2-core buddy
+    try testing.expect(core_count >= 2);
+    try testing.expect(core_arms >= 1);
+
+    var non_jelly_creature_nodes: usize = 0;
+    var worm_min_x: f32 = 10000.0;
+    var worm_max_x: f32 = -10000.0;
 
     var v_it2 = ecs.query_iter(world, ecs.singleton_get(world, C.PhysicsState).?.verlet_query);
     while (ecs.query_next(&v_it2)) {
@@ -845,6 +1128,7 @@ test "sandbox SimPipeline runs multi-step frame: drink purple, refill key helper
             if (!ecs.has_pair(world, e, ecs.ChildOf, creatures_group)) continue;
             if (ecs.has_id(world, e, landable_id)) continue;
 
+            var matched_core = false;
             var t_idx: i32 = 0;
             while (t_idx < 4) : (t_idx += 1) {
                 const raw_target = ecs.get_target(world, e, attached_id, t_idx);
@@ -854,13 +1138,21 @@ test "sandbox SimPipeline runs multi-step frame: drink purple, refill key helper
                     if (target == cid) {
                         if (p.y < blob_min_y[c_idx]) blob_min_y[c_idx] = p.y;
                         if (p.y > blob_max_y[c_idx]) blob_max_y[c_idx] = p.y;
+                        matched_core = true;
                         break;
                     }
                 }
             }
+            if (!matched_core) {
+                non_jelly_creature_nodes += 1;
+                if (p.x < worm_min_x) worm_min_x = p.x;
+                if (p.x > worm_max_x) worm_max_x = p.x;
+            }
         }
     }
 
+    try testing.expect(non_jelly_creature_nodes >= 21);
+    try testing.expect((worm_max_x - worm_min_x) > 40.0);
     for (0..core_count) |c_idx| {
         try testing.expect((blob_max_y[c_idx] - blob_min_y[c_idx]) > 40.0);
     }

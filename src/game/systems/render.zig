@@ -266,21 +266,23 @@ pub fn render_system(it: *ecs.iter_t) void {
                 Effect.none,
             );
         } else if (!link.child_is_landable and !link.parent_is_landable) {
+            const cap_r0: f32 = if (link.landable_center_pos != null) 4.5 else @max(1.4, link.parent_r * 0.55);
+            const cap_r1: f32 = if (link.landable_center_pos != null) 4.5 else @max(1.4, link.child_r * 0.55);
             pixel_mod.drawCapsuleFilled(
                 engine,
                 link.parent_pos.x,
                 link.parent_pos.y,
-                4.5,
+                cap_r0,
                 link.child_pos.x,
                 link.child_pos.y,
-                4.5,
+                cap_r1,
                 link.color,
                 link.effect,
             );
         }
     }
 
-    // 2c. Jelly PlayerLandable cores and any unlinked Verlet Renderables
+    // 2c. Jelly PlayerLandable cores, articulated non-jelly joints/heads, and unlinked Verlet nodes
     var v_it = ecs.query_iter(world, phys.verlet_query);
     while (ecs.query_next(&v_it)) {
         const positions = ecs.field(&v_it, C.Position, 0).?;
@@ -291,7 +293,9 @@ pub fn render_system(it: *ecs.iter_t) void {
             const e = ents[i];
             const has_links = ecs.get_target(world, e, ecs.id(C.AttachedTo), 0) != 0;
             const is_landable = ecs.has_id(world, e, ecs.id(C.PlayerLandable));
-            if (!is_landable and has_links) continue;
+            const is_tail = attachments_group != 0 and ecs.has_pair(world, e, ecs.ChildOf, attachments_group);
+            const is_jelly_skin = has_links and !is_landable and findLandableCenterPos(world, e) != null;
+            if (is_tail or is_jelly_skin) continue;
 
             const rend = ecs.get(world, e, C.Renderable) orelse continue;
             const color = pixel_mod.packColor(rend.color.r, rend.color.g, rend.color.b, rend.color.a);

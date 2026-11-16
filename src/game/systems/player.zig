@@ -13,7 +13,9 @@ pub const PLAYER_SPEED: f32 = 360.0; // Max ground run speed (px/s)
 pub const JUMP_SPEED: f32 = 590.0; // Initial vertical jump velocity (px/s)
 pub const FAST_DROP_SPEED: f32 = 400.0; // Downward velocity when pressing down
 pub const GROUND_ACCEL: f32 = 14.0; // Ground acceleration factor (subtle ramp on launch)
-pub const GROUND_FRICTION: f32 = 12.0; // Ground deceleration when no horizontal input
+pub const GROUND_FRICTION: f32 = 30.0; // Ground deceleration when no horizontal input (snappy stop)
+pub const GROUND_REVERSE_MULT: f32 = 2.5; // Extra braking multiplier when counter-strafing on ground
+pub const GROUND_STOP_THRESHOLD: f32 = 18.0; // Snap low ground drift cleanly to 0
 pub const AIR_STRAFE_MAX_SPEED: f32 = 260.0; // Quake-style air-strafe cap along wish dir (preserves higher momentum!)
 pub const AIR_STRAFE_ACCEL: f32 = 18.0; // Quake-style air acceleration multiplier when A/D pressed
 pub const AIR_DRAG: f32 = 0.25; // Light passive air drag when no horizontal input
@@ -238,11 +240,11 @@ pub fn stepHorizontalVelocity(vel_x_in: f32, recoil_x: *f32, dx: f32, is_grounde
         if (dx != 0.0) {
             const target_vx = dx * PLAYER_SPEED;
             const reversing = (vx * dx) < 0.0;
-            const accel_rate = if (reversing) GROUND_ACCEL * 2.0 else GROUND_ACCEL;
+            const accel_rate = if (reversing) GROUND_ACCEL * GROUND_REVERSE_MULT else GROUND_ACCEL;
             vx = target_vx + (vx - target_vx) * std.math.exp(-accel_rate * dt);
         } else {
             vx *= std.math.exp(-GROUND_FRICTION * dt);
-            if (@abs(vx) < 1.0) vx = 0.0;
+            if (@abs(vx) < GROUND_STOP_THRESHOLD) vx = 0.0;
         }
     } else {
         if (dx != 0.0) {
@@ -587,4 +589,11 @@ test "stepHorizontalVelocity gives subtle ground launch and Quake-style air stra
         air_vx = stepHorizontalVelocity(air_vx, &recoil_x, -1.0, false, dt);
     }
     try testing.expect(air_vx < -50.0);
+
+    // 4. Releasing keys on ground stops full run speed snappily (~0.1s) without long sliding
+    var ground_vx: f32 = PLAYER_SPEED;
+    for (0..14) |_| {
+        ground_vx = stepHorizontalVelocity(ground_vx, &recoil_x, 0.0, true, dt);
+    }
+    try testing.expectEqual(@as(f32, 0.0), ground_vx);
 }

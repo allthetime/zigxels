@@ -624,7 +624,7 @@ pub fn stepVerletPBDWithAllocator(world: *ecs.world_t, allocator: std.mem.Alloca
         if (player_pos != null and player_vel != null and player_col != null) {
             solvePlayerContacts(particles.items, player_pos.?, player_vel.?, player_col.?);
         }
-        if (iter == 0 or iter == 3 or iter == SOLVER_ITERATIONS - 1) {
+        if ((iter & 1) == 0 or iter == SOLVER_ITERATIONS - 1) {
             solveTerrainContacts(particles.items, grid, grounds.items, &ground_checks, &ground_hits);
         }
     }
