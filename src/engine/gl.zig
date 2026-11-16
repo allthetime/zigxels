@@ -1,6 +1,6 @@
 /// Minimal OpenGL 3.3 Core bindings loaded via SDL_GL_GetProcAddress.
 /// Only the functions needed for fullscreen-quad + texture upload + shader pipeline.
-const SDL = @import("sdl2");
+const sdl = @import("sdl3");
 
 // --- GL Types ---
 pub const GLuint = c_uint;
@@ -155,13 +155,9 @@ pub var clearColor: ClearColorProc = undefined;
 pub var getError: GetErrorProc = undefined;
 pub var pixelStorei: PixelStoreiProc = undefined;
 
-fn load(name: [:0]const u8) ?*const anyopaque {
-    return SDL.gl.getProcAddress(name);
-}
-
 fn loadFn(comptime T: type, name: [:0]const u8) T {
-    if (load(name)) |ptr| {
-        return @ptrCast(@alignCast(ptr));
+    if (sdl.SDL_GL_GetProcAddress(name.ptr)) |ptr| {
+        return @ptrCast(ptr);
     }
     @panic("Failed to load GL function");
 }

@@ -1,5 +1,4 @@
 const std = @import("std");
-const SDL = @import("sdl2");
 const ecs = @import("zflecs");
 const z2 = @import("zig_c2");
 
@@ -13,11 +12,12 @@ const C = @import("game/components.zig");
 const HEIGHT: usize = 1440 / 2;
 const WIDTH: usize = 2560 / 2;
 
-pub fn main() !void {
-    var engine = try engine_mod.Engine.init(WIDTH, HEIGHT);
+pub fn main(init: std.process.Init) !void {
+    var engine = try engine_mod.Engine.init(init.gpa, WIDTH, HEIGHT);
     defer engine.deinit();
 
     var input = input_mod.InputState{};
+    defer input.deinit();
 
     pixels_mod.makeGradientSIMD(engine.sky_buffer, engine.width, engine.height);
     @memcpy(engine.background_buffer, engine.sky_buffer);
@@ -29,7 +29,7 @@ pub fn main() !void {
     ecs.set_ctx(world, &engine, dummy_free);
     try setup_game(world, &engine);
 
-    var time_ticks = SDL.getTicks64();
+    var time_ticks = engine_mod.Engine.getTicksMs();
 
     // activate web console
     // https://www.flecs.dev/explorer?host=localhost:2771
@@ -131,7 +131,7 @@ fn dummy_free(ctx: ?*anyopaque) callconv(.c) void {
 }
 
 fn calculateDeltaTime(last_time: *u64) f32 {
-    const now = SDL.getTicks64();
+    const now = engine_mod.Engine.getTicksMs();
     const dt = @as(f32, @floatFromInt(now - last_time.*)) / 1000.0;
     last_time.* = now;
     // Cap delta time to prevent large jumps (e.g., first frame or lag)
@@ -349,7 +349,7 @@ fn spawn_player_tail(world: *ecs.world_t, player: ecs.entity_t) void {
 
         // Add PhysicsBody! This allows existing gravity_system and physics_collision_system to work.
         // _ = ecs.set(world, seg, C.PhysicsBody, .{ .restitution = 0.0, .friction = 0.5 });
-        _ = ecs.set(world, seg, C.Renderable, .{ .color = SDL.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } });
+        _ = ecs.set(world, seg, C.Renderable, .{ .color = C.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } });
         _ = ecs.set(world, seg, Effect, Effect.glow_only);
 
         if (last_one) {
@@ -379,13 +379,13 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) !void
     _ = ecs.set(world, player, C.Position, .{ .x = @as(f32, @floatFromInt(engine.width)) / 2.0, .y = @as(f32, @floatFromInt(engine.height)) / 2.0 });
     _ = ecs.set(world, player, C.Velocity, .{ .x = 0.0, .y = 0.0 });
     _ = ecs.set(world, player, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = PLAYER_SIZE / 2.0 } });
-    _ = ecs.set(world, player, C.Renderable, .{ .color = SDL.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
+    _ = ecs.set(world, player, C.Renderable, .{ .color = C.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
     _ = ecs.set(world, player, C.RecoilImpulse, .{ .x = 0.0 });
     _ = ecs.singleton_set(world, C.PlayerContainer, .{ .entity = player });
 
     const gun = ecs.new_entity(world, "Gun");
     _ = ecs.set(world, gun, C.Position, .{ .x = 0.0, .y = 0.0 });
-    _ = ecs.set(world, gun, C.Renderable, .{ .color = SDL.Color{ .r = 0, .g = 0, .b = 255, .a = 255 } });
+    _ = ecs.set(world, gun, C.Renderable, .{ .color = C.Color{ .r = 0, .g = 0, .b = 255, .a = 255 } });
     _ = ecs.set(world, gun, C.Collider, .{ .box = .{ .min = .{ .x = -4, .y = -4 }, .max = .{ .x = 4, .y = 4 } } });
     _ = ecs.set(world, gun, C.Gun, .{ .fire_rate = 0.05 });
     _ = ecs.add_pair(world, gun, ecs.ChildOf, player);
@@ -506,7 +506,7 @@ fn spawn_level(world: *ecs.world_t, engine: *engine_mod.Engine) void {
     const floor = ecs.new_entity(world, "Floor");
     _ = ecs.set(world, floor, C.Position, .{ .x = @as(f32, w) / 2.0, .y = @as(f32, h) - 50.0 });
     _ = ecs.set(world, floor, C.Collider, .{ .box = .{ .min = .{ .x = -@as(f32, w) / 2.0, .y = -50.0 }, .max = .{ .x = @as(f32, w) / 2.0, .y = 50 } } });
-    _ = ecs.set(world, floor, C.Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
+    _ = ecs.set(world, floor, C.Renderable, .{ .color = C.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
     ecs.add(world, floor, C.Ground);
 
     // Heat shimmer zone above the main platform (invisible — effect only)
@@ -554,7 +554,7 @@ fn spawnGroundGrid(world: *ecs.world_t, start_x: f32, start_y: f32, width: f32, 
             // Small collider for each tile
             const half = tile_size / 2.0;
             _ = ecs.set(world, e, C.Collider, .{ .box = .{ .min = .{ .x = -half, .y = -half }, .max = .{ .x = half, .y = half } } });
-            _ = ecs.set(world, e, C.Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
+            _ = ecs.set(world, e, C.Renderable, .{ .color = C.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } });
             _ = ecs.add(world, e, C.Destroyable);
             ecs.add_pair(world, e, ecs.ChildOf, grid_grouping);
         }
@@ -575,7 +575,7 @@ fn spawn_jelly_blob(world: *ecs.world_t, cx: f32, cy: f32, radius: f32, segments
     _ = ecs.set(world, center, C.Position, .{ .x = cx, .y = cy });
     _ = ecs.set(world, center, C.VerletState, .{ .old_x = cx, .old_y = cy, .friction = 0.99 });
     _ = ecs.set(world, center, C.Velocity, .{ .x = 0, .y = 0 }); // Needed for your integration
-    _ = ecs.set(world, center, C.Renderable, .{ .color = SDL.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
+    _ = ecs.set(world, center, C.Renderable, .{ .color = C.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } });
 
     // We give the center a collider so it doesn't clip through thin walls!
     _ = ecs.set(world, center, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = radius / 2.0 } });
@@ -601,7 +601,7 @@ fn spawn_jelly_blob(world: *ecs.world_t, cx: f32, cy: f32, radius: f32, segments
         // Perimeter nodes collide with the ground!
         _ = ecs.set(world, node, C.Collider, .{ .circle = .{ .p = .{ .x = 0, .y = 0 }, .r = 2.0 } });
         _ = ecs.set(world, node, C.PhysicsBody, .{ .restitution = 0.1, .friction = 0.9 });
-        _ = ecs.set(world, node, C.Renderable, .{ .color = SDL.Color{ .r = 0, .g = 255, .b = 255, .a = 255 } });
+        _ = ecs.set(world, node, C.Renderable, .{ .color = C.Color{ .r = 0, .g = 255, .b = 255, .a = 255 } });
 
         // reach towards the player
         const player = ecs.singleton_get(world, C.PlayerContainer).?.entity;
@@ -647,4 +647,33 @@ fn spawn_jelly_blob(world: *ecs.world_t, cx: f32, cy: f32, radius: f32, segments
 
 fn usize_to_f32(i: usize) f32 {
     return @as(f32, @floatFromInt(i));
+}
+
+test {
+    _ = @import("engine/effects.zig");
+    _ = @import("engine/pixels.zig");
+}
+
+test "zflecs world lifecycle and zoot_c2 normal direction" {
+    const testing = std.testing;
+
+    const world = ecs.init();
+    defer _ = ecs.fini(world);
+    ecs.COMPONENT(world, C.Position);
+
+    const e = ecs.new_id(world);
+    _ = ecs.set(world, e, C.Position, .{ .x = 12.0, .y = 34.0 });
+    const pos = ecs.get(world, e, C.Position).?;
+    try testing.expectEqual(@as(f32, 12.0), pos.x);
+    try testing.expectEqual(@as(f32, 34.0), pos.y);
+
+    var m: z2.Manifold = undefined;
+    z2.circleToCircleManifold(
+        .{ .p = .{ .x = 0, .y = 0 }, .r = 10 },
+        .{ .p = .{ .x = 0, .y = 15 }, .r = 10 },
+        &m,
+    );
+    try testing.expectEqual(@as(i32, 1), m.count);
+    try testing.expectApproxEqAbs(@as(f32, 5.0), m.depths[0], 0.001);
+    try testing.expect(m.n.y > 0.99);
 }

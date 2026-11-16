@@ -161,8 +161,8 @@ pub const ShaderPipeline = struct {
     pub fn init(width: usize, height: usize) !ShaderPipeline {
         // --- Compile shaders ---
         const vert = compileShader(gl.GL_VERTEX_SHADER, vert_source) orelse return error.VertexShaderCompilationFailed;
-        const frag = compileShader(gl.GL_FRAGMENT_SHADER, frag_source) orelse return error.FragmentShaderCompilationFailed;
         defer gl.deleteShader(vert);
+        const frag = compileShader(gl.GL_FRAGMENT_SHADER, frag_source) orelse return error.FragmentShaderCompilationFailed;
         defer gl.deleteShader(frag);
 
         const program = linkProgram(vert, frag) orelse return error.ShaderLinkFailed;
@@ -261,6 +261,7 @@ pub const ShaderPipeline = struct {
         // Upload color buffer (ABGR u32 → [R,G,B,A] in LE memory → matches GL_RGBA)
         gl.activeTexture(gl.GL_TEXTURE0);
         gl.bindTexture(gl.GL_TEXTURE_2D, self.color_texture);
+        gl.pixelStorei(gl.GL_UNPACK_ALIGNMENT, 4);
         gl.texSubImage2D(
             gl.GL_TEXTURE_2D,
             0,

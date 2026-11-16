@@ -61,3 +61,17 @@ pub const Effect = packed struct(u8) {
         return @truncate(val >> 8);
     }
 };
+
+test "Effect bitflags and intensity packing round-trip" {
+    const testing = @import("std").testing;
+    const fx = Effect.merge(Effect.bloom_only, Effect.heat_only);
+    try testing.expect(fx.bloom);
+    try testing.expect(fx.heat);
+    try testing.expect(!fx.blur);
+    try testing.expect(fx.hasAny());
+
+    const packed_val = fx.withIntensity(173);
+    const decoded_fx = Effect.flagsFromU16(packed_val);
+    try testing.expectEqual(fx.toByte(), decoded_fx.toByte());
+    try testing.expectEqual(@as(u8, 173), Effect.intensityFromU16(packed_val));
+}

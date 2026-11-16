@@ -1,6 +1,5 @@
 const std = @import("std");
 const ecs = @import("zflecs");
-const SDL = @import("sdl2");
 const components = @import("components.zig");
 const Engine = @import("../engine/core.zig").Engine;
 const c2 = @import("zig_c2");
@@ -423,7 +422,7 @@ pub fn shoot_system(it: *ecs.iter_t, guns: []components.Gun, positions: []Positi
 
         // Rendering Component (Purple)
         _ = ecs.set(world, bullet, Renderable, .{
-            .color = SDL.Color{ .r = 255, .g = 0, .b = 255, .a = 255 },
+            .color = components.Color{ .r = 255, .g = 0, .b = 255, .a = 255 },
         });
 
         // _ = ecs.set(world, bullet, Effect, Effect.none); // NEW: Bullet has special render effect
@@ -1018,8 +1017,10 @@ const ExplosionOptions = struct {
     randomness: f32 = 1.0, // Additional random velocity factor (0.0 = no randomness, 1.0 = full random direction)
 };
 
+var explosion_prng = std.Random.DefaultPrng.init(0x9e3779b97f4a7c15);
+
 fn make_explosion(world: *ecs.world_t, x: f32, y: f32, dir_x: f32, dir_y: f32, options: ExplosionOptions) void {
-    const rnd = std.crypto.random;
+    const rnd = explosion_prng.random();
     for (0..10) |_| {
         const e = ecs.new_id(world);
 

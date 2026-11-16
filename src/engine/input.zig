@@ -1,7 +1,7 @@
-const SDL = @import("sdl2");
+const sdl = @import("sdl3");
 const std = @import("std");
 
-const AXIS_MAX: f32 = 32767.0; // 32767
+const AXIS_MAX: f32 = 32767.0;
 
 const PressedDirections = struct {
     up: bool = false,
@@ -25,13 +25,13 @@ const ActiveInputMethod = enum {
 };
 
 pub const InputState = struct {
-    mouse_x: i32 = 0,
-    mouse_y: i32 = 0,
+    mouse_x: f32 = 0.0,
+    mouse_y: f32 = 0.0,
     is_pressing: bool = false,
     quit_requested: bool = false,
     pressed_directions: PressedDirections = PressedDirections{},
     reset: bool = false,
-    controller: ?SDL.GameController = null,
+    controller: ?*sdl.SDL_Gamepad = null,
     right_stick_x: f32 = 0.0,
     right_stick_y: f32 = 0.0,
     debug_mode: bool = false,
@@ -49,68 +49,78 @@ pub const InputState = struct {
     mouse_state: MouseState = MouseState{},
     d_pad_a_pressed: bool = false,
 
-    pub fn update(self: *InputState) void {
-        while (SDL.pollEvent()) |e| {
-            switch (e) {
-                .quit => self.quit_requested = true,
-                .controller_device_added => |c| {
-                    const c_which_i32_as_u_31: u31 = @intCast(c.which);
-                    if (self.controller == null) {
-                        self.controller = SDL.GameController.open(c_which_i32_as_u_31) catch null;
-                    }
-                },
+    pub fn deinit(self: *InputState) void {
+        if (self.controller) |ctrl| {
+            sdl.SDL_CloseGamepad(ctrl);
+            self.controller = null;
+        }
+    }
 
-                .controller_device_removed => |_| {
-                    if (self.controller) |ctrl| {
-                        ctrl.close();
-                        self.controller = null;
+    pub fn update(self: *InputState) void {
+        var event: sdl.SDL_Event = undefined;
+        while (sdl.SDL_PollEvent(&event)) {
+            switch (event.type) {
+                sdl.SDL_EVENT_QUIT => self.quit_requested = true,
+                sdl.SDL_EVENT_GAMEPAD_ADDED => {
+                    if (self.controller == null) {
+                        self.controller = sdl.SDL_OpenGamepad(event.gdevice.which);
                     }
                 },
-                .controller_button_down, .controller_button_up => |c| {
-                    const is_pressed = c.button_state == .pressed;
-                    switch (c.button) {
-                        .dpad_up => self.dpad_state.pressed_directions.up = is_pressed,
-                        .dpad_down => self.dpad_state.pressed_directions.down = is_pressed,
-                        .dpad_left => self.dpad_state.pressed_directions.left = is_pressed,
-                        .dpad_right => self.dpad_state.pressed_directions.right = is_pressed,
-                        .start => {
+                sdl.SDL_EVENT_GAMEPAD_REMOVED => {
+                    if (self.controller) |ctrl| {
+                        if (sdl.SDL_GetGamepadID(ctrl) == event.gdevice.which) {
+                            sdl.SDL_CloseGamepad(ctrl);
+                            self.controller = null;
+                        }
+                    }
+                },
+                sdl.SDL_EVENT_GAMEPAD_BUTTON_DOWN, sdl.SDL_EVENT_GAMEPAD_BUTTON_UP => {
+                    const is_pressed = event.gbutton.down;
+                    if (is_pressed) self.active_input_method = .controller;
+                    switch (@as(c_int, event.gbutton.button)) {
+                        sdl.SDL_GAMEPAD_BUTTON_DPAD_UP => self.dpad_state.pressed_directions.up = is_pressed,
+                        sdl.SDL_GAMEPAD_BUTTON_DPAD_DOWN => self.dpad_state.pressed_directions.down = is_pressed,
+                        sdl.SDL_GAMEPAD_BUTTON_DPAD_LEFT => self.dpad_state.pressed_directions.left = is_pressed,
+                        sdl.SDL_GAMEPAD_BUTTON_DPAD_RIGHT => self.dpad_state.pressed_directions.right = is_pressed,
+                        sdl.SDL_GAMEPAD_BUTTON_START => {
                             if (is_pressed) self.reset = true;
                         },
-                        .back => {
+                        sdl.SDL_GAMEPAD_BUTTON_BACK => {
                             if (is_pressed) self.quit_requested = true;
                         },
-                        .a => { // Cross on DS4
+                        sdl.SDL_GAMEPAD_BUTTON_SOUTH => { // Cross on DS4
                             self.d_pad_a_pressed = is_pressed;
                         },
-                        .right_shoulder => {
+                        sdl.SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER => {
                             self.dpad_state.is_pressing = is_pressed;
                         },
                         else => {},
                     }
                 },
-                .controller_axis_motion => |c| {
-                    const deadzone = 8000;
-                    const respond_to_change = @abs(c.value) > deadzone;
+                sdl.SDL_EVENT_GAMEPAD_AXIS_MOTION => {
+                    const deadzone: i32 = 8000;
+                    const value: i32 = event.gaxis.value;
+                    const respond_to_change = @abs(value) > deadzone;
                     if (respond_to_change) self.active_input_method = .controller;
-                    switch (c.axis) {
-                        .left_x => {
-                            self.stick_state.pressed_directions.right = c.value > deadzone;
-                            self.stick_state.pressed_directions.left = c.value < -deadzone;
+                    switch (@as(c_int, event.gaxis.axis)) {
+                        sdl.SDL_GAMEPAD_AXIS_LEFTX => {
+                            self.stick_state.pressed_directions.right = value > deadzone;
+                            self.stick_state.pressed_directions.left = value < -deadzone;
                         },
-                        .left_y => {
-                            self.stick_state.pressed_directions.down = c.value > deadzone;
-                            self.stick_state.pressed_directions.up = c.value < -deadzone;
+                        sdl.SDL_GAMEPAD_AXIS_LEFTY => {
+                            self.stick_state.pressed_directions.down = value > deadzone;
+                            self.stick_state.pressed_directions.up = value < -deadzone;
                         },
-                        .right_x => {
+                        sdl.SDL_GAMEPAD_AXIS_RIGHTX => {
                             if (respond_to_change) {
-                                self.right_stick_x = @as(f32, @floatFromInt(c.value)) / AXIS_MAX;
+                                self.right_stick_x = @as(f32, @floatFromInt(value)) / AXIS_MAX;
                             } else {
                                 self.right_stick_x = 0.0;
                             }
                         },
-                        .right_y => {
+                        sdl.SDL_GAMEPAD_AXIS_RIGHTY => {
                             if (respond_to_change) {
-                                self.right_stick_y = @as(f32, @floatFromInt(c.value)) / AXIS_MAX;
+                                self.right_stick_y = @as(f32, @floatFromInt(value)) / AXIS_MAX;
                             } else {
                                 self.right_stick_y = 0.0;
                             }
@@ -118,42 +128,35 @@ pub const InputState = struct {
                         else => {},
                     }
                 },
-                .mouse_motion => |m| {
+                sdl.SDL_EVENT_MOUSE_MOTION => {
                     self.active_input_method = .keyboard_mouse;
-                    self.mouse_x = m.x;
-                    self.mouse_y = m.y;
+                    self.mouse_x = event.motion.x;
+                    self.mouse_y = event.motion.y;
                 },
-                .mouse_button_down => |m| {
-                    _ = m;
-                    // m.button // left, middle, right
-                    self.mouse_state.is_pressing = true;
+                sdl.SDL_EVENT_MOUSE_BUTTON_DOWN, sdl.SDL_EVENT_MOUSE_BUTTON_UP => {
+                    self.active_input_method = .keyboard_mouse;
+                    if (event.button.button == sdl.SDL_BUTTON_LEFT) {
+                        self.mouse_state.is_pressing = event.button.down;
+                    }
                 },
-                .mouse_button_up => {
-                    self.mouse_state.is_pressing = false;
-                },
-                .key_down, .key_up => |k| {
-                    // Handle keyboard events here if needed
-                    switch (k.keycode) {
-                        .escape => {
-                            if (k.key_state == .pressed) self.quit_requested = true;
+                sdl.SDL_EVENT_KEY_DOWN, sdl.SDL_EVENT_KEY_UP => {
+                    const is_pressed = event.key.down;
+                    if (is_pressed) self.active_input_method = .keyboard_mouse;
+                    switch (event.key.key) {
+                        sdl.SDLK_ESCAPE => {
+                            if (is_pressed) self.quit_requested = true;
                         },
-                        .w, .a, .s, .d => {
-                            const is_pressed = k.key_state == .pressed;
-                            switch (k.keycode) {
-                                .w => self.keyboard_state.pressed_directions.up = is_pressed,
-                                .a => self.keyboard_state.pressed_directions.left = is_pressed,
-                                .s => self.keyboard_state.pressed_directions.down = is_pressed,
-                                .d => self.keyboard_state.pressed_directions.right = is_pressed,
-                                else => {},
-                            }
-                        },
-                        .r => {
-                            if (k.key_state == .pressed and k.is_repeat == false) {
+                        sdl.SDLK_W => self.keyboard_state.pressed_directions.up = is_pressed,
+                        sdl.SDLK_A => self.keyboard_state.pressed_directions.left = is_pressed,
+                        sdl.SDLK_S => self.keyboard_state.pressed_directions.down = is_pressed,
+                        sdl.SDLK_D => self.keyboard_state.pressed_directions.right = is_pressed,
+                        sdl.SDLK_R => {
+                            if (is_pressed and !event.key.repeat) {
                                 self.reset = true;
                             }
                         },
-                        .grave => {
-                            if (k.key_state == .pressed and k.is_repeat == false) {
+                        sdl.SDLK_GRAVE => {
+                            if (is_pressed and !event.key.repeat) {
                                 self.debug_mode = !self.debug_mode;
                             }
                         },
@@ -162,11 +165,12 @@ pub const InputState = struct {
                 },
                 else => {},
             }
-            self.pressed_directions.up = self.keyboard_state.pressed_directions.up or self.dpad_state.pressed_directions.up or self.stick_state.pressed_directions.up or self.d_pad_a_pressed;
-            self.pressed_directions.down = self.keyboard_state.pressed_directions.down or self.dpad_state.pressed_directions.down or self.stick_state.pressed_directions.down;
-            self.pressed_directions.left = self.keyboard_state.pressed_directions.left or self.dpad_state.pressed_directions.left or self.stick_state.pressed_directions.left;
-            self.pressed_directions.right = self.keyboard_state.pressed_directions.right or self.dpad_state.pressed_directions.right or self.stick_state.pressed_directions.right;
-            self.is_pressing = self.dpad_state.is_pressing or self.mouse_state.is_pressing;
         }
+
+        self.pressed_directions.up = self.keyboard_state.pressed_directions.up or self.dpad_state.pressed_directions.up or self.stick_state.pressed_directions.up or self.d_pad_a_pressed;
+        self.pressed_directions.down = self.keyboard_state.pressed_directions.down or self.dpad_state.pressed_directions.down or self.stick_state.pressed_directions.down;
+        self.pressed_directions.left = self.keyboard_state.pressed_directions.left or self.dpad_state.pressed_directions.left or self.stick_state.pressed_directions.left;
+        self.pressed_directions.right = self.keyboard_state.pressed_directions.right or self.dpad_state.pressed_directions.right or self.stick_state.pressed_directions.right;
+        self.is_pressing = self.dpad_state.is_pressing or self.mouse_state.is_pressing;
     }
 };

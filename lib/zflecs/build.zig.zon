@@ -1,0 +1,15 @@
+.{
+    .name = .zflecs,
+    .fingerprint = 0xb539547bca77f3d4,
+    .version = "0.2.0-dev",
+    .dependencies = .{},
+    .minimum_zig_version = "0.17.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "libs",
+        "src",
+        "README.md",
+        "LICENSE",
+    },
+}

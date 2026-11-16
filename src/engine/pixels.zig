@@ -186,3 +186,9 @@ pub fn restoreRect(engine: *Engine, x: i32, y: i32, w: usize, h: usize) void {
         @memset(engine.effect_buffer[row_start..row_end], @as(u16, 0));
     }
 }
+
+test "packColor packs RGBA in little-endian ABGR order" {
+    const testing = std.testing;
+    const c = packColor(0x11, 0x22, 0x33, 0x44);
+    try testing.expectEqual(@as(u32, 0x44332211), c);
+}
