@@ -57,69 +57,71 @@ const frag_source: [:0]const u8 =
     \\}
     \\
     \\void main() {
-    \\    vec4 color = texture(u_color, TexCoord);
     \\    vec2 efx = texture(u_effects, TexCoord).rg;
-    \\    float effects = efx.r * 255.0;
+    \\    float effects = floor(efx.r * 255.0 + 0.5);
     \\    float intensity = efx.g;  // 0.0 - 1.0 (feathered edge alpha)
     \\    vec2 texel = 1.0 / u_resolution;
-    \\    vec4 result = color;
     \\
     \\    // Early out — no effect flags set at this pixel
     \\    if (effects < 0.5) {
-    \\        FragColor = color;
+    \\        FragColor = texture(u_color, TexCoord);
     \\        return;
     \\    }
     \\
     \\    // All effects are modulated by the intensity channel.
     \\    // CPU effect zones write feathered intensity to create soft edges.
-    \\
-    \\    if (hasFlag(effects, BIT_BLOOM)) {
-    \\        vec4 bloomed = fastBlur(TexCoord, 6.0);
-    \\        result += bloomed * intensity * 1.2;
-    \\    }
-    \\
-    \\    if (hasFlag(effects, BIT_GLOW)) {
-    \\        vec4 glowed = fastBlur(TexCoord, 8.0);
-    \\        result = mix(result, max(result, glowed * 1.5), intensity);
-    \\    }
-    \\
-    \\    if (hasFlag(effects, BIT_BLUR)) {
-    \\        vec4 blurred = fastBlur(TexCoord, 4.0);
-    \\        result = mix(result, blurred, intensity);
-    \\    }
+    \\    vec2 sample_uv = TexCoord;
     \\
     \\    if (hasFlag(effects, BIT_DISTORT)) {
-    \\        vec2 offset = vec2(
+    \\        sample_uv += vec2(
     \\            sin(TexCoord.y * 30.0 + u_time * 3.0) * 0.008,
     \\            cos(TexCoord.x * 30.0 + u_time * 2.5) * 0.008
     \\        ) * intensity;
-    \\        result = texture(u_color, TexCoord + offset);
     \\    }
     \\
     \\    if (hasFlag(effects, BIT_HEAT)) {
     \\        float wave1 = sin(TexCoord.y * 50.0 - u_time * 5.0) * 0.008;
     \\        float wave2 = sin(TexCoord.y * 120.0 - u_time * 9.0) * 0.004;
     \\        float wave3 = cos(TexCoord.x * 30.0 + u_time * 2.0) * 0.003;
-    \\        vec2 haze = vec2(wave1 + wave2 + wave3, abs(wave1) * 0.8) * intensity;
-    \\        result = texture(u_color, TexCoord + haze);
+    \\        sample_uv += vec2(wave1 + wave2 + wave3, abs(wave1) * 0.8) * intensity;
+    \\    }
+    \\
+    \\    vec4 result = texture(u_color, sample_uv);
+    \\
+    \\    if (hasFlag(effects, BIT_CHROMATIC)) {
+    \\        float strength = 3.0 * texel.x * intensity;
+    \\        float pulse = sin(u_time * 4.0) * texel.x * intensity;
+    \\        float r_base = texture(u_color, sample_uv + vec2(strength, 0.0)).r;
+    \\        float b_base = texture(u_color, sample_uv - vec2(strength, 0.0)).b;
+    \\        result.r = mix(r_base, texture(u_color, sample_uv + vec2(strength + pulse, pulse)).r, 0.5);
+    \\        result.b = mix(b_base, texture(u_color, sample_uv - vec2(strength + pulse, pulse)).b, 0.5);
+    \\    }
+    \\
+    \\    if (hasFlag(effects, BIT_HEAT)) {
     \\        result.r += 0.08 * intensity;
     \\        result.g += 0.03 * intensity;
     \\    }
     \\
-    \\    if (hasFlag(effects, BIT_CHROMATIC)) {
-    \\        float strength = 3.0 * texel.x * intensity;
-    \\        result.r = texture(u_color, TexCoord + vec2(strength, 0.0)).r;
-    \\        result.b = texture(u_color, TexCoord - vec2(strength, 0.0)).b;
-    \\        float pulse = sin(u_time * 4.0) * texel.x * intensity;
-    \\        result.r = mix(result.r, texture(u_color, TexCoord + vec2(strength + pulse, pulse)).r, 0.5);
-    \\        result.b = mix(result.b, texture(u_color, TexCoord - vec2(strength + pulse, pulse)).b, 0.5);
+    \\    if (hasFlag(effects, BIT_BLOOM)) {
+    \\        vec4 bloomed = fastBlur(sample_uv, 6.0);
+    \\        result += bloomed * intensity * 1.2;
+    \\    }
+    \\
+    \\    if (hasFlag(effects, BIT_GLOW)) {
+    \\        vec4 glowed = fastBlur(sample_uv, 8.0);
+    \\        result = mix(result, max(result, glowed * 1.5), intensity);
+    \\    }
+    \\
+    \\    if (hasFlag(effects, BIT_BLUR)) {
+    \\        vec4 blurred = fastBlur(sample_uv, 4.0);
+    \\        result = mix(result, blurred, intensity);
     \\    }
     \\
     \\    if (hasFlag(effects, BIT_DISSOLVE)) {
     \\        float noise = hash(floor(TexCoord * u_resolution / 3.0) + floor(u_time * 2.0));
     \\        float phase = fract(u_time * 0.4);
     \\        if (noise < phase * intensity) {
-    \\            result.a = 0.0;
+    \\            discard;
     \\        } else {
     \\            float edge = smoothstep(phase, phase + 0.15, noise);
     \\            result.rgb += (1.0 - edge) * vec3(1.0, 0.4, 0.1) * 1.5 * intensity;

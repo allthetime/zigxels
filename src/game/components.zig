@@ -1,6 +1,5 @@
 const ecs = @import("zflecs");
 const c2 = @import("zig_c2");
-const std = @import("std");
 
 pub const Color = struct {
     r: u8,
@@ -35,12 +34,15 @@ pub const ExplosionParticle = struct {
     color: u32,
 };
 
-// tag!
+// Tags
 pub const Bullet = struct {};
 pub const Player = struct {};
 pub const Ground = struct {};
 pub const Destroyable = struct {};
-pub const EffectZone = struct {}; // tag: invisible entity that stamps effect flags
+pub const EffectZone = struct {}; // Invisible entity that stamps GPU effect flags
+pub const GroundGrid = struct {};
+pub const PlayerLandable = struct {};
+
 pub const PhysicsBody = struct {
     /// Restitution (bounciness) of the physics body
     restitution: f32 = 0.9,
@@ -48,10 +50,7 @@ pub const PhysicsBody = struct {
     friction: f32 = 0.99,
 };
 
-pub const GroundGrid = struct {};
-pub const PlayerLandable = struct {};
-
-// singletons for easy access
+// Group singletons for ownership and reset lifecycle
 pub const GroundGroup = struct {
     entity: ecs.entity_t,
 };
@@ -60,48 +59,38 @@ pub const BulletsGroup = struct {
     entity: ecs.entity_t,
 };
 
+pub const CreaturesGroup = struct {
+    entity: ecs.entity_t,
+};
+
+pub const PlayerAttachmentsGroup = struct {
+    entity: ecs.entity_t,
+};
+
 pub const PlayerContainer = struct {
     entity: ecs.entity_t,
 };
 
-// cached queries for physics systems
+// Cached queries for physics and debug systems
 pub const PhysicsState = struct {
     ground_query: *ecs.query_t,
     verlet_query: *ecs.query_t,
     player_landable_query: *ecs.query_t,
+    collider_query: *ecs.query_t,
 };
 
-// IK
-
+// Verlet / IK components
 pub const VerletState = struct {
     old_x: f32,
     old_y: f32,
-    mass: f32 = 1.0, // 0.0 represents infinite mass (Pinned/Anchor)
-    friction: f32 = 0.95, // 1.0 = vacuum, 0.9 = air resistance
+    friction: f32 = 0.95, // 1.0 = vacuum, <1.0 = damping
 };
-
-// pub const DistanceConstraint = struct {
-//     target: ecs.entity_t, // The entity this constraint attaches to
-//     target_dist: f32, // Desired distance
-//     stiffness: f32 = 1.0, // 1.0 = Rigid, <1.0 = Elastic/Springy
-// };
-
-// pub const TendencyTowards = struct {
-//     target: ecs.entity_t,
-//     strength: f32,
-// };
-
-// pub const ConstraintData = struct {
-//     dist: f32 = 0.0,
-//     stiffness: f32 = 1.0,
-// };
-
-// new multi-constraint system
 
 pub const AttachedTo = struct {
     dist: f32 = 0.0,
     stiffness: f32 = 1.0,
 };
+
 pub const ReachTowards = struct {
     stiffness: f32 = 1.0,
 };
