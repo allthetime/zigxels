@@ -406,10 +406,11 @@ fn spawn_initial_entities(world: *ecs.world_t, engine: *engine_mod.Engine) !void
     // spawn_jelly_blob(world, center_x, 50.0, 30.0, 12);
 
     // Spawn 3: Slightly to the right, large
-    spawn_jelly_blob(world, center_x + 120.0, 150.0, 120.0, 10);
+    const j1 = spawn_jelly_blob(world, center_x * 2.0 - 100.0, 150.0, 80.0, 10, null);
+    _ = spawn_jelly_blob(world, center_x * 2.0 - 100.0 - 160.0, 150.0, 80.0, 10, &j1);
 
     // for (0..5) |i| {
-    // spawn_jelly_blob(world, center_x + (@as(f32, @floatFromInt(i)) * 50.0) - 100.0, 100.0, 80.0, 13);
+    //     spawn_jelly_blob(world, center_x + (@as(f32, @floatFromInt(i)) * 50.0) - 100.0, 300.0, 40.0, 5);
     // }
 
     // Cache the Ground Query for Physics Systems
@@ -481,17 +482,26 @@ fn spawn_level(world: *ecs.world_t, engine: *engine_mod.Engine) void {
     _ = ecs.set(world, right_wall, C.Collider, .{ .box = .{ .min = .{ .x = -wall_thickness_half, .y = -h }, .max = .{ .x = wall_thickness_half, .y = h } } });
     ecs.add(world, right_wall, C.Ground);
 
-    const cx1 = @as(f32, w) / 2.0;
-    const cy1 = @as(f32, h) / 1.5;
-    spawnGroundGrid(world, cx1 - 150, cy1 - 25, 300, 50, ground_group);
+    // const cx1 = @as(f32, w) / 2.0;
+    // const cy1 = @as(f32, h) / 1.5;
+    // spawnGroundGrid(world, cx1 - 150, cy1 - 25, 300, 50, ground_group);
 
-    const cx2 = @as(f32, w) / 2.0 - 200;
-    const cy2 = @as(f32, h) / 1.5 - 100;
-    spawnGroundGrid(world, cx2 - 100, cy2 - 10, 200, 20, ground_group);
+    // const cx2 = @as(f32, w) / 2.0 - 200;
+    // const cy2 = @as(f32, h) / 1.5 - 100;
+    // spawnGroundGrid(world, cx2 - 100, cy2 - 10, 200, 20, ground_group);
 
-    const cx3 = @as(f32, w) / 2.0 + 100;
-    const cy3 = @as(f32, h) / 1.5 - 60;
-    spawnGroundGrid(world, cx3 - 50, cy3 - 10, 100, 20, ground_group);
+    // const cx3 = @as(f32, w) / 2.0 + 100;
+    // const cy3 = @as(f32, h) / 1.5 - 60;
+    // spawnGroundGrid(world, cx3 - 50, cy3 - 10, 100, 20, ground_group);
+
+    const split_width_in_30 = w / 30.0;
+    const split_height_in_30_minus_floor = h / 30.0;
+    for (0..60) |j| {
+        const i = j / 2;
+        const cx = split_width_in_30 * @as(f32, @floatFromInt(i)) + (split_width_in_30 / 2.0);
+        const cy = split_height_in_30_minus_floor * @as(f32, @floatFromInt(i)) + (split_height_in_30_minus_floor / 2.0);
+        spawnGroundGrid(world, cx - 5, cy - 5, 10, 10, ground_group);
+    }
 
     const floor = ecs.new_entity(world, "Floor");
     _ = ecs.set(world, floor, C.Position, .{ .x = @as(f32, w) / 2.0, .y = @as(f32, h) - 50.0 });
@@ -551,7 +561,7 @@ fn spawnGroundGrid(world: *ecs.world_t, start_x: f32, start_y: f32, width: f32, 
     }
 }
 
-fn spawn_jelly_blob(world: *ecs.world_t, cx: f32, cy: f32, radius: f32, segments: usize) void {
+fn spawn_jelly_blob(world: *ecs.world_t, cx: f32, cy: f32, radius: f32, segments: usize, connectTo: ?*const ecs.entity_t) ecs.entity_t {
     // We need an allocator to temporarily hold our perimeter node IDs so we can link them
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -604,7 +614,7 @@ fn spawn_jelly_blob(world: *ecs.world_t, cx: f32, cy: f32, radius: f32, segments
         // Stiffness < 1.0 makes it squishy like jello!
         _ = ecs.set_pair(world, node, ecs.id(C.AttachedTo), center, C.AttachedTo, .{
             .dist = radius + (2.0 * @as(f32, @floatFromInt(i))),
-            .stiffness = 0.1,
+            .stiffness = 0.05,
         });
     }
 
@@ -620,6 +630,19 @@ fn spawn_jelly_blob(world: *ecs.world_t, cx: f32, cy: f32, radius: f32, segments
             .stiffness = 1.0,
         });
     }
+
+    if (connectTo) |parent| {
+        const parent_pos = ecs.get(world, parent.*, C.Position).?;
+        const dx = cx - parent_pos.x;
+        const dy = cy - parent_pos.y;
+        const actual_dist = @sqrt(dx * dx + dy * dy);
+        _ = ecs.set_pair(world, center, ecs.id(C.AttachedTo), parent.*, C.AttachedTo, .{
+            .dist = actual_dist, // preserve initial spacing
+            .stiffness = 0.1,
+        });
+    }
+
+    return center;
 }
 
 fn usize_to_f32(i: usize) f32 {

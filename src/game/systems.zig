@@ -748,6 +748,34 @@ pub fn physics_collision_system(it: *ecs.iter_t, positions: []Position, velociti
     for (0..doomed_bullet_count) |i| {
         ecs.delete(world, doomed_bullets[i]);
     }
+
+    // After the doomed entity deletion loops, add:
+    const bullet_ents = it.entities();
+    for (0..it.count()) |i| {
+        if (!ecs.has_id(world, bullet_ents[i], ecs.id(Bullet))) continue;
+        const ci = colliders[i];
+        if (ci != .circle) continue;
+
+        for (i + 1..it.count()) |j| {
+            if (!ecs.has_id(world, bullet_ents[j], ecs.id(Bullet))) continue;
+            const cj = colliders[j];
+            if (cj != .circle) continue;
+
+            const circle_a = c2.Circle{ .p = .{ .x = positions[i].x + ci.circle.p.x, .y = positions[i].y + ci.circle.p.y }, .r = ci.circle.r };
+            const circle_b = c2.Circle{ .p = .{ .x = positions[j].x + cj.circle.p.x, .y = positions[j].y + cj.circle.p.y }, .r = cj.circle.r };
+
+            var m: c2.Manifold = undefined;
+            m.count = 0;
+            c2.circleToCircleManifold(circle_a, circle_b, &m);
+
+            if (m.count > 0) {
+                // Resolve both bullets symmetrically
+                resolveBody(&positions[i], &velocities[i], m.n, m.depths[0] * 0.5, &physicsBodies[i]);
+                const neg_n = c2.Vec2{ .x = -m.n.x, .y = -m.n.y };
+                resolveBody(&positions[j], &velocities[j], neg_n, m.depths[0] * 0.5, &physicsBodies[j]);
+            }
+        }
+    }
 }
 
 pub fn verlet_collision_system(it: *ecs.iter_t, positions: []Position, verlets: []components.VerletState, colliders: []Collider, physicsBodies: []PhysicsBody) void {

@@ -1,6 +1,7 @@
 .{
     .name = .pixels,
     .version = "0.15.2",
+    .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .SDL2 = .{
             .url = "git+https://github.com/ikskuh/SDL.zig/?ref=HEAD#a7e95b5fcc5b0d68921c148778609d2fe248c3d8",
