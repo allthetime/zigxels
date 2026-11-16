@@ -71,12 +71,71 @@ pub const PlayerContainer = struct {
     entity: ecs.entity_t,
 };
 
-// Cached queries for physics and debug systems
+pub const GamePipelines = struct {
+    sim: ecs.entity_t,
+    render: ecs.entity_t,
+};
+
+pub const FrameMetrics = struct {
+    fixed_steps: u32 = 0,
+    dropped_excess_time: bool = false,
+    frame_dt_ms: f32 = 0.0,
+    update_ms: f32 = 0.0,
+    render_cpu_ms: f32 = 0.0,
+    render_gl_ms: f32 = 0.0,
+
+    bullet_count: u32 = 0,
+    ground_count: u32 = 0,
+    verlet_count: u32 = 0,
+    explosion_count: u32 = 0,
+
+    physics_checks: u32 = 0,
+    physics_hits: u32 = 0,
+    verlet_ground_checks: u32 = 0,
+    verlet_ground_hits: u32 = 0,
+    verlet_self_checks: u32 = 0,
+    verlet_self_hits: u32 = 0,
+    verlet_bullet_checks: u32 = 0,
+    verlet_bullet_hits: u32 = 0,
+
+    pub fn resetPerFrame(self: *FrameMetrics) void {
+        self.fixed_steps = 0;
+        self.dropped_excess_time = false;
+        self.frame_dt_ms = 0.0;
+        self.update_ms = 0.0;
+        self.render_cpu_ms = 0.0;
+        self.render_gl_ms = 0.0;
+        self.physics_checks = 0;
+        self.physics_hits = 0;
+        self.verlet_ground_checks = 0;
+        self.verlet_ground_hits = 0;
+        self.verlet_self_checks = 0;
+        self.verlet_self_hits = 0;
+        self.verlet_bullet_checks = 0;
+        self.verlet_bullet_hits = 0;
+    }
+
+    pub fn totalCollisionChecks(self: FrameMetrics) u32 {
+        return self.physics_checks + self.verlet_ground_checks + self.verlet_self_checks + self.verlet_bullet_checks;
+    }
+
+    pub fn totalCollisionHits(self: FrameMetrics) u32 {
+        return self.physics_hits + self.verlet_ground_hits + self.verlet_self_hits + self.verlet_bullet_hits;
+    }
+};
+
+// Cached queries for physics, rendering, and debug systems
 pub const PhysicsState = struct {
     ground_query: *ecs.query_t,
     verlet_query: *ecs.query_t,
     player_landable_query: *ecs.query_t,
     collider_query: *ecs.query_t,
+    attachment_query: ?*ecs.query_t = null,
+    reach_query: ?*ecs.query_t = null,
+    bullet_query: ?*ecs.query_t = null,
+    explosion_query: ?*ecs.query_t = null,
+    render_ground_query: ?*ecs.query_t = null,
+    render_actor_query: ?*ecs.query_t = null,
 };
 
 // Verlet / IK components
@@ -94,3 +153,13 @@ pub const AttachedTo = struct {
 pub const ReachTowards = struct {
     stiffness: f32 = 1.0,
 };
+
+pub fn singletonGetSafe(world: *ecs.world_t, comptime T: type) ?*const T {
+    if (ecs.id(T) == 0) return null;
+    return ecs.singleton_get(world, T);
+}
+
+pub fn singletonGetMutSafe(world: *ecs.world_t, comptime T: type) ?*T {
+    if (ecs.id(T) == 0) return null;
+    return ecs.singleton_get_mut(world, T);
+}

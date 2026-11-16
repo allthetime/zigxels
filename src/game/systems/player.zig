@@ -14,6 +14,7 @@ const Axis = enum { x, y };
 fn playerTouchesLandable(world: *ecs.world_t, player_pos: C.Position, player_col: C.Collider) bool {
     const phys = ecs.singleton_get(world, C.PhysicsState) orelse return false;
     if (player_col != .circle) return false;
+    const metrics = C.singletonGetMutSafe(world, C.FrameMetrics);
 
     var q_it = ecs.query_iter(world, phys.player_landable_query);
 
@@ -23,8 +24,10 @@ fn playerTouchesLandable(world: *ecs.world_t, player_pos: C.Position, player_col
 
         for (core_positions, core_colliders) |core_pos, core_col| {
             if (core_col != .circle) continue;
+            if (metrics) |m| m.physics_checks += 1;
             const contact = physics.collideManifold(player_pos, player_col, core_pos, core_col);
             if (contact.count > 0 and contact.n.y > 0.5) {
+                if (metrics) |m| m.physics_hits += 1;
                 ecs.iter_fini(&q_it);
                 return true;
             }
@@ -32,56 +35,6 @@ fn playerTouchesLandable(world: *ecs.world_t, player_pos: C.Position, player_col
     }
 
     return false;
-}
-
-fn resolvePlayerLandableContacts(
-    world: *ecs.world_t,
-    player_pos: *C.Position,
-    player_vel: *C.Velocity,
-    player_col: C.Collider,
-) void {
-    const phys = ecs.singleton_get(world, C.PhysicsState) orelse return;
-    if (player_col != .circle) return;
-
-    var q_it = ecs.query_iter(world, phys.player_landable_query);
-
-    while (ecs.query_next(&q_it)) {
-        const core_positions = ecs.field(&q_it, C.Position, 1).?;
-        const core_colliders = ecs.field(&q_it, C.Collider, 2).?;
-        const core_verlets = ecs.field(&q_it, C.VerletState, 3).?;
-
-        for (core_positions, core_colliders, core_verlets) |*core_pos, core_col, *core_verlet| {
-            if (core_col != .circle) continue;
-
-            const contact = physics.collideManifold(player_pos.*, player_col, core_pos.*, core_col);
-            if (contact.count == 0) continue;
-
-            const separation = contact.depths[0] + physics.SURFACE_EPSILON;
-            const normal = contact.n; // Player -> jelly core
-            const landing = player_vel.y > 0.0 and normal.y > 0.5;
-
-            if (landing) {
-                const player_share: f32 = 0.85;
-                const core_share: f32 = 0.15;
-
-                player_pos.x -= normal.x * separation * player_share;
-                player_pos.y -= normal.y * separation * player_share;
-                player_vel.y = 0.0;
-
-                const push_x = normal.x * separation * core_share;
-                const push_y = normal.y * separation * core_share;
-                core_pos.x += push_x;
-                core_pos.y += push_y;
-                core_verlet.old_x += push_x;
-                core_verlet.old_y += push_y;
-            } else {
-                core_pos.x += normal.x * separation;
-                core_pos.y += normal.y * separation;
-                core_verlet.old_x += normal.x * separation;
-                core_verlet.old_y += normal.y * separation;
-            }
-        }
-    }
 }
 
 /// Resolve axis movement flush against overlapping Ground AABBs instead of rolling back full dt steps.
@@ -94,6 +47,7 @@ fn resolveAxisGroundCollision(
     axis: Axis,
 ) void {
     const phys = ecs.singleton_get(world, C.PhysicsState) orelse return;
+    const metrics = C.singletonGetMutSafe(world, C.FrameMetrics);
     const local_aabb = physics.getWorldAABB(.{ .x = 0, .y = 0 }, col);
 
     var q_it = ecs.query_iter(world, phys.ground_query);
@@ -104,9 +58,11 @@ fn resolveAxisGroundCollision(
         const g_colliders = ecs.field(&q_it, C.Collider, 2).?;
 
         for (0..q_it.count()) |i| {
+            if (metrics) |m| m.physics_checks += 1;
             const player_aabb = physics.getWorldAABB(pos.*, col);
             const ground_aabb = physics.getWorldAABB(g_positions[i], g_colliders[i]);
             if (!c2.aabbToAABB(player_aabb, ground_aabb)) continue;
+            if (metrics) |m| m.physics_hits += 1;
 
             hit = true;
             switch (axis) {
@@ -190,8 +146,6 @@ pub fn player_controller_system(
         const prev_y = pos.y;
         pos.y += vel.y * dt;
         resolveAxisGroundCollision(world, pos, vel, col, prev_y, .y);
-
-        resolvePlayerLandableContacts(world, pos, vel, col);
     }
 }
 

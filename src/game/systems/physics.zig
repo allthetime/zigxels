@@ -63,6 +63,7 @@ pub fn collideManifold(pos_a: C.Position, col_a: C.Collider, pos_b: C.Position, 
 /// Check if an AABB overlaps any Ground entity.
 pub fn checkCollision(world: *ecs.world_t, test_aabb: c2.AABB) bool {
     const phys = ecs.singleton_get(world, C.PhysicsState) orelse return false;
+    const metrics = C.singletonGetMutSafe(world, C.FrameMetrics);
     var q_it = ecs.query_iter(world, phys.ground_query);
 
     while (ecs.query_next(&q_it)) {
@@ -70,8 +71,10 @@ pub fn checkCollision(world: *ecs.world_t, test_aabb: c2.AABB) bool {
         const g_colliders = ecs.field(&q_it, C.Collider, 2).?;
 
         for (0..q_it.count()) |i| {
+            if (metrics) |m| m.physics_checks += 1;
             const ground_aabb = getWorldAABB(g_positions[i], g_colliders[i]);
             if (c2.aabbToAABB(test_aabb, ground_aabb)) {
+                if (metrics) |m| m.physics_hits += 1;
                 ecs.iter_fini(&q_it);
                 return true;
             }
@@ -132,6 +135,7 @@ pub fn physics_collision_system(
     const engine = Engine.getEngine(world);
     const arena = engine.arena.allocator();
     const ents = it.entities();
+    const metrics = C.singletonGetMutSafe(world, C.FrameMetrics);
 
     var doomed_ground: std.ArrayList(ecs.entity_t) = .empty;
     var doomed_bullets: std.ArrayList(ecs.entity_t) = .empty;
@@ -154,8 +158,10 @@ pub fn physics_collision_system(
             for (positions, velocities, colliders, physicsBodies, 0..) |*pos, *vel, col, *pb, entity_idx| {
                 if (entity_doomed[entity_idx]) continue;
 
+                if (metrics) |mtr| mtr.physics_checks += 1;
                 const m = collideManifold(pos.*, col, gp, gcol);
                 if (m.count == 0) continue;
+                if (metrics) |mtr| mtr.physics_hits += 1;
 
                 const entity = ents[entity_idx];
                 const is_bullet = ecs.has_id(world, entity, ecs.id(C.Bullet));
@@ -197,8 +203,10 @@ pub fn physics_collision_system(
             if (!ecs.has_id(world, ents[j], ecs.id(C.Bullet))) continue;
             if (colliders[j] != .circle) continue;
 
+            if (metrics) |mtr| mtr.physics_checks += 1;
             const m = collideManifold(positions[i], colliders[i], positions[j], colliders[j]);
             if (m.count > 0) {
+                if (metrics) |mtr| mtr.physics_hits += 1;
                 resolveBody(&positions[i], &velocities[i], m.n, m.depths[0] * 0.5, &physicsBodies[i]);
                 resolveBody(&positions[j], &velocities[j], m.n.neg(), m.depths[0] * 0.5, &physicsBodies[j]);
             }
@@ -262,16 +270,17 @@ pub fn explosion_lifetime_system(it: *ecs.iter_t, particles: []C.ExplosionPartic
 
 pub fn explosion_render_system(it: *ecs.iter_t, positions: []C.Position, particles: []C.ExplosionParticle) void {
     const engine = Engine.getEngine(it.world);
-    const sprite_size: usize = 5;
 
     for (positions, particles) |pos, p| {
-        pixel_mod.drawRect(
+        const fade = std.math.clamp(p.lifetime / 0.5, 0.0, 1.0);
+        const alpha: u8 = @intFromFloat(fade * 255.0);
+        pixel_mod.drawCircleFilledAlpha(
             engine,
-            @intFromFloat(pos.x),
-            @intFromFloat(pos.y),
-            sprite_size,
-            sprite_size,
+            pos.x,
+            pos.y,
+            3.0,
             p.color,
+            alpha,
             Effect.none,
         );
     }

@@ -31,6 +31,14 @@ pub const Engine = struct {
         return sdl.SDL_GetTicks();
     }
 
+    pub fn getTicksNs() u64 {
+        return sdl.SDL_GetTicksNS();
+    }
+
+    pub fn setWindowTitle(self: *Engine, title: [*:0]const u8) void {
+        _ = sdl.SDL_SetWindowTitle(self.window, title);
+    }
+
     pub fn init(allocator: std.mem.Allocator, width: usize, height: usize) !Engine {
         if (!sdl.SDL_Init(sdl.SDL_INIT_AUDIO | sdl.SDL_INIT_VIDEO | sdl.SDL_INIT_EVENTS | sdl.SDL_INIT_GAMEPAD)) {
             std.log.err("SDL_Init failed: {s}", .{sdl.SDL_GetError()});
